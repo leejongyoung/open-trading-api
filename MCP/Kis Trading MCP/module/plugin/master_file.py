@@ -48,8 +48,7 @@ class MasterFileManager:
         "etfetn": [],  # ETF/ETN 마스터파일 없음
         "elw": [
             "elw_master"
-        ],
-        "auth": []  # 인증은 마스터파일 불필요
+        ]
     }
 
     # 마스터파일별 URL과 처리 함수 매핑 (한국투자증권 기준)
@@ -307,8 +306,7 @@ class MasterFileManager:
             "overseas_futureoption": "OverseasFutureoptionMaster",
             "domestic_bond": "DomesticBondMaster",
             "etfetn": "EtfetnMaster",
-            "elw": "ElwMaster",
-            "auth": "AuthMaster"
+            "elw": "ElwMaster"
         }
         
         model_name = tool_to_model_mapping.get(tool_name)
