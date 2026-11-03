@@ -170,3 +170,18 @@ def test_expiry_response_retries_once(fetch_copy, monkeypatch):
     res = mod._url_fetch("/uapi/test", "TTTC0012U", "", {}, None, True, False)
     assert res.isOK()
     assert len(reauths) == 1
+
+
+# ---- 이슈 #12: changeTREnv가 모드별 호출 간격을 실제로 바꾼다 ----
+
+def test_change_trenv_updates_smart_sleep(any_copy):
+    """모의(vps) 0.5초·실전(prod) 0.05초가 모듈 전역에 반영된다."""
+    _, mod = any_copy
+    if not hasattr(mod, "_smartSleep"):
+        pytest.skip("이 복제본에는 _smartSleep이 없다(legacy)")
+    mod.changeTREnv("DUMMYTOKEN", "vps", "01")
+    assert mod._isPaper is True
+    assert mod._smartSleep == 0.5
+    mod.changeTREnv("DUMMYTOKEN", "prod", "01")
+    assert mod._isPaper is False
+    assert mod._smartSleep == 0.05
