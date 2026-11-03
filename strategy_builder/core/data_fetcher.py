@@ -577,7 +577,7 @@ def get_pending_orders(env_dv: str = "real") -> tuple[pd.DataFrame, bool]:
             "SLL_BUY_DVSN_CD": "00",  # 전체
             "INQR_DVSN": "00",  # 역순
             "PDNO": "",  # 전체 종목
-            "CCLD_DVSN": "01",  # 미체결
+            "CCLD_DVSN": "02",  # 미체결 (00: 전체, 01: 체결, 02: 미체결)
             "ORD_GNO_BRNO": "",
             "ODNO": "",
             "INQR_DVSN_3": "00",
