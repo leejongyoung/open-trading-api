@@ -19,6 +19,13 @@ ALLOWED_ENV_DV = frozenset({"real", "demo"})
 TRENV_EXPR_PATTERN = re.compile(r"^ka\._TRENV\.\w+$")
 FUNCTION_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
+# 실전 주문 게이트 (이슈 #2): 주문 API 분류·실전 옵트인·읽기전용·허용목록
+# api_path는 조회/주문을 가리지 못하므로(/trading/ 아래 둘 다 존재) 이름 기준으로 분류한다.
+# 조회 예외: order_resv_list(예약주문조회), algo_ordno/foreign_margin 등은 분류 밖(조회)이다.
+_ORDER_API_PREFIXES = ("order", "daytime_order")
+_ORDER_API_NAMES = frozenset({"buy", "sell"})
+_ORDER_READ_EXCEPTIONS = frozenset({"order_resv_list"})
+
 # 사용자 입력을 포함하지 않는 고정 실행 템플릿 (function_name만 서버 검증 후 치환)
 API_RUNNER_TEMPLATE = """
 # MCP API runner (fixed template)
@@ -494,12 +501,58 @@ class BaseTool(ABC):
         return f"./configs/{self.tool_name}.json"
 
     # ========== Public Methods ==========
+    @staticmethod
+    def _is_order_api(api_type: str) -> bool:
+        """주문(파괴적) API 여부. 조회 예외(order_resv_list 등)는 제외."""
+        return (api_type in _ORDER_API_NAMES
+                or api_type.startswith(_ORDER_API_PREFIXES)) \
+            and api_type not in _ORDER_READ_EXCEPTIONS
+
+    @classmethod
+    def _check_execution_policy(cls, api_type: str, params: dict, env=None):
+        """실행 정책 게이트. 차단 시 에러 문자열, 허용 시 None.
+
+        - MCP_ALLOWED_APIS가 설정되면 목록 외 api_type을 모두 차단한다.
+        - 주문 API는 MCP_READ_ONLY=1에서 모두 차단한다.
+        - 주문 API + env_dv='real'은 MCP_ALLOW_REAL_ORDERS=1 옵트인 없이 차단한다.
+        """
+        env = os.environ if env is None else env
+        allow = (env.get("MCP_ALLOWED_APIS") or "").strip()
+        if allow:
+            allowed = {a.strip() for a in allow.split(",") if a.strip()}
+            if api_type not in allowed:
+                return (f"API_ALLOWLIST_BLOCKED: '{api_type}'이(가) "
+                        f"MCP_ALLOWED_APIS 허용목록에 없습니다.")
+        if cls._is_order_api(api_type):
+            if (env.get("MCP_READ_ONLY") or "") == "1":
+                return ("READ_ONLY_MODE: 읽기 전용 모드(MCP_READ_ONLY=1)에서는 "
+                        "주문 API를 실행할 수 없습니다.")
+            env_dv = params.get("env_dv", "demo") if isinstance(params, dict) else "demo"
+            if env_dv == "real" and (env.get("MCP_ALLOW_REAL_ORDERS") or "") != "1":
+                return ("REAL_ORDER_BLOCKED: 실전 주문(env_dv='real')은 명시적 옵트인 "
+                        "MCP_ALLOW_REAL_ORDERS=1 없이는 실행할 수 없습니다.")
+        return None
+
+    def _tool_annotations(self) -> Dict[str, Any]:
+        """주문 API 포함 여부에 따른 MCP 도구 어노테이션"""
+        try:
+            apis = (self.config or {}).get("apis", {})
+            has_order = any(self._is_order_api(t) for t in apis)
+        except Exception:
+            has_order = False
+        if has_order:
+            return {"destructiveHint": True, "readOnlyHint": False,
+                    "openWorldHint": True, "idempotentHint": False}
+        return {"destructiveHint": False, "readOnlyHint": True,
+                "openWorldHint": True, "idempotentHint": True}
+
     def register(self, mcp_server: FastMCP) -> None:
         """MCP 서버에 도구 등록"""
         mcp_server.tool(
             self._run,
             name=self.tool_name,
             description=self.description,
+            annotations=self._tool_annotations(),
         )
 
     # ========== Protected Methods ==========
@@ -561,6 +614,7 @@ class BaseTool(ABC):
                 lines.append("- 시장코드(fid_cond_mrkt_div_code)='J'(KRX)/'NX'(넥스트레이드)/'UN'(통합)")
             lines.append("- 매매구분(ord_dv)='buy'(매수)/'sell'(매도)")
             lines.append("- 실전모의구분(env_dv)='real'(실전)/'demo'(모의)")
+            lines.append("- 실전 주문 게이트: 주문 API + env_dv='real'은 MCP_ALLOW_REAL_ORDERS=1 옵트인 없이 차단됩니다. MCP_READ_ONLY=1이면 모든 주문 API가 차단됩니다.")
             lines.append("")
             lines.append("⚠️ 중요: API 호출 시 필수 주의사항")
             lines.append("**API 실행 전 반드시 API 상세 문서의 파라미터를 확인하세요. Request Query Params와 Request Body 입력 시 추측이나 과거 실행 값 사용 금지, 확인된 API 상세 문서의 값을 사용하세요.**")
@@ -612,6 +666,10 @@ class BaseTool(ABC):
             if api_type not in self.config['apis']:
                 return {"ok": False, "error": f"지원하지 않는 API 타입: {api_type}"}
 
+            # 3b. 실행 정책 게이트 (실전 주문 옵트인·읽기전용·허용목록)
+            policy_error = self._check_execution_policy(api_type, params)
+            if policy_error is not None:
+                return {"ok": False, "error": policy_error}
 
             # 4. 종목명 자동 처리 (stock_name이 있으면 자동으로 pdno 변환)
             params = await self._process_stock_name(ctx, params)
