@@ -35,6 +35,27 @@ def _is_order_api_type(api_type: str) -> bool:
     return (api_type in _ORDER_API_NAMES
             or api_type.startswith(_ORDER_API_PREFIXES)) \
         and api_type not in _ORDER_READ_EXCEPTIONS
+
+
+# 도구별 계좌상품코드 (이슈 #5): 러너의 ka.auth(product)에 전달한다.
+# 주식·채권·ELW·ETF/ETN·해외주식은 종합계좌(01), 국내선물옵션 03, 해외선물옵션 08.
+# cano·acnt_prdt_cd 강제 값(my_acct·my_prod)은 이 product로 해소되므로 일치한다.
+# 모의 해외선물(08)은 kis_auth vps 분기에 08 계좌 선택이 없어 별도 이슈로 다룬다.
+TOOL_PRODUCT_DEFAULTS = {
+    "domestic_stock": "01",
+    "overseas_stock": "01",
+    "domestic_bond": "01",
+    "elw": "01",
+    "etfetn": "01",
+    "auth": "01",
+    "domestic_futureoption": "03",
+    "overseas_futureoption": "08",
+}
+
+
+def _resolve_product(tool_name: str) -> str:
+    """도구명에 대응하는 계좌상품코드. 미등록 도구는 01."""
+    return TOOL_PRODUCT_DEFAULTS.get(tool_name or "", "01")
 # 다운로드 고정 (이슈 #3): main 추적 금지. API 예제는 검증된 커밋 SHA로 고정하고
 # SHA-256 매니페스트(api_hashes.json)로 검증 후 디스크 캐시에 보관한다.
 # kis_auth는 포크 수정본을 패키지에 번들(bundled_kis_auth.py)하므로 내려받지 않는다.
@@ -57,10 +78,11 @@ if __name__ == "__main__":
         _mcp_cfg = json.load(f)
 
     _env_dv = _mcp_cfg["env_dv"]
+    _product = _mcp_cfg.get("product")
     if _env_dv == "demo":
-        ka.auth("vps")
+        ka.auth("vps") if _product is None else ka.auth("vps", _product)
     else:
-        ka.auth()
+        ka.auth() if _product is None else ka.auth("prod", _product)
 
     _kwargs = {}
     for _k, _v in _mcp_cfg["params"].items():
@@ -314,8 +336,8 @@ class ApiExecutor:
         raise Exception("코드에서 함수를 찾을 수 없습니다.")
 
     @classmethod
-    def _modify_api_code(cls, api_code_path: str, params: Dict[str, Any], api_type: str) -> str:
-        """API 코드 수정 (파라미터 적용)"""
+    def _modify_api_code(cls, api_code_path: str, params: Dict[str, Any], api_type: str, tool_name: str = "") -> str:
+        """API 코드 수정 (파라미터 적용). 도구별 상품코드를 페이로드에 심는다."""
         try:
             import re
 
@@ -405,6 +427,7 @@ class ApiExecutor:
                 "params": cls._serialize_params_for_runner(adjusted_params),
                 "has_stock_name": "stock_name" in params,
                 "is_order": _is_order_api_type(api_type),
+                "product": _resolve_product(tool_name),
             }
             params_json_path = os.path.join(temp_dir, "params.json")
             with open(params_json_path, "w", encoding="utf-8") as f:
@@ -530,7 +553,7 @@ class ApiExecutor:
                 self._download_api_code, github_url, temp_dir, api_type)
 
             # 4. 코드 수정
-            self._modify_api_code(api_code_path, params, api_type)
+            self._modify_api_code(api_code_path, params, api_type, self.tool_name)
 
             # 5. 코드 실행 (주문 계열은 긴 타임아웃, 자동 재시도 없음)
             execution_result = await asyncio.to_thread(
@@ -718,6 +741,7 @@ class BaseTool(ABC):
                 lines.append("- 시장코드(fid_cond_mrkt_div_code)='J'(KRX)/'NX'(넥스트레이드)/'UN'(통합)")
             lines.append("- 매매구분(ord_dv)='buy'(매수)/'sell'(매도)")
             lines.append("- 실전모의구분(env_dv)='real'(실전)/'demo'(모의)")
+            lines.append("- 계좌상품코드(product)는 도구별로 서버가 자동 설정합니다(주식·채권·ELW·ETF/ETN·해외주식 01, 국내선물옵션 03, 해외선물옵션 08). 직접 전달하지 마세요.")
             lines.append("- 실전 주문 게이트: 주문 API + env_dv='real'은 MCP_ALLOW_REAL_ORDERS=1 옵트인 없이 차단됩니다. MCP_READ_ONLY=1이면 모든 주문 API가 차단됩니다.")
             lines.append("")
             lines.append("⚠️ 중요: API 호출 시 필수 주의사항")
