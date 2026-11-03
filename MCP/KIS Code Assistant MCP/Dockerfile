@@ -33,6 +33,11 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Set the default port
 ENV PORT=8081
 
+# 컨테이너 안에서는 0.0.0.0으로 바인딩해야 포트 publish가 가능하다.
+# 호스트 노출은 `docker run -p 127.0.0.1:8081:8081`로 로컬에만 제한할 것.
+# 인증: -e MCP_ACCESS_TOKEN=..., CORS: -e MCP_CORS_ORIGINS=https://a.example,https://b.example
+ENV MCP_HOST=0.0.0.0
+
 # Reset the entrypoint, don't invoke `uv`
 ENTRYPOINT []
 
