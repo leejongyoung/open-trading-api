@@ -5,6 +5,11 @@
 # (0) 필요 모듈 임포트
 import pandas as pd
 import requests
+
+# 모든 KIS HTTP 호출의 (connect, read) 타임아웃. 주문 POST 타임아웃은
+# "상태 불명"으로 취급한다(접수됐을 수 있으므로 자동 재시도 금지).
+REQ_TIMEOUT = (5.0, 30.0)
+
 import json
 import yaml
 import time
@@ -32,7 +37,7 @@ def get_access_token():
             "appsecret": APP_SECRET}
     PATH = "oauth2/tokenP"
     URL = f"{URL_BASE}/{PATH}"
-    res = requests.post(URL, headers=headers, data=json.dumps(body))
+    res = requests.post(URL, headers=headers, data=json.dumps(body), timeout=REQ_TIMEOUT)
     time.sleep(0.1)
     try:
         ACCESS_TOKEN = res.json()["access_token"]
@@ -79,7 +84,7 @@ def get_overseas_future_time_price(SRS="6AZ23", EXCH="CME", STRT_DT="",END_DT=""
         "QRY_GAP": GAP,
         "INDEX_KEY": ""
     }    
-    res = requests.get(URL, headers=headers, params=params)
+    res = requests.get(URL, headers=headers, params=params, timeout=REQ_TIMEOUT)
     time.sleep(0.1) # 유량제한 예방 (REST: 1초당 20건 제한)
     output = res.json()['output1']
     

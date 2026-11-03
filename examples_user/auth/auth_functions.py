@@ -5,6 +5,11 @@ from typing import Optional, Tuple
 
 import pandas as pd
 import requests
+
+# 모든 KIS HTTP 호출의 (connect, read) 타임아웃. 주문 POST 타임아웃은
+# "상태 불명"으로 취급한다(접수됐을 수 있으므로 자동 재시도 금지).
+REQ_TIMEOUT = (5.0, 30.0)
+
 import json
 
 sys.path.extend(['..', '.'])
@@ -91,7 +96,7 @@ def auth_token(
 
     try:
         # POST 방식으로 직접 API 호출
-        response = requests.post(url, data=json.dumps(data), headers=headers)
+        response = requests.post(url, data=json.dumps(data), headers=headers, timeout=REQ_TIMEOUT)
         
         if response.status_code == 200:
             # 응답 데이터를 DataFrame으로 반환 (1개 row)
@@ -194,7 +199,7 @@ def auth_ws_token(
 
     try:
         # POST 방식으로 직접 API 호출
-        response = requests.post(url, data=json.dumps(data), headers=headers)
+        response = requests.post(url, data=json.dumps(data), headers=headers, timeout=REQ_TIMEOUT)
         
         if response.status_code == 200:
             # 응답 데이터를 DataFrame으로 반환 (1개 row)

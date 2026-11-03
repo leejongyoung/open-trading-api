@@ -38,6 +38,7 @@ with open(config_root + 'kis_devlp.yaml', encoding='UTF-8') as f:
     _cfg = yaml.load(f, Loader=yaml.FullLoader)
 
 _TRENV = tuple()
+REQ_TIMEOUT = (5.0, 30.0)  # 모든 KIS HTTP 호출의 (connect, read) 타임아웃
 _last_auth_time = datetime.now()
 _autoReAuth = False
 _last_svr = None  # 마지막으로 auth()를 호출한 서버 구분 (prod:실전, vps:모의)
@@ -225,7 +226,7 @@ def auth(svr='prod', product='01', url=None):
     print("saved_token: ", saved_token)
     if saved_token is None:  # 기존 발급 토큰 확인이 안되면 발급처리
         url = f'{_cfg[svr]}/oauth2/tokenP'
-        res = requests.post(url, data=json.dumps(p), headers=_getBaseHeader())  # 토큰 발급
+        res = requests.post(url, data=json.dumps(p), headers=_getBaseHeader(), timeout=REQ_TIMEOUT)  # 토큰 발급
         rescode = res.status_code
         if rescode == 200:  # 토큰 정상 발급
             my_token = _getResultObject(res.json()).access_token  # 토큰값 가져오기

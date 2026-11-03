@@ -51,6 +51,7 @@ with open(config_root + 'kis_devlp.yaml', encoding='UTF-8') as f:
     _cfg = yaml.load(f, Loader=yaml.FullLoader)
 
 _TRENV = tuple()
+REQ_TIMEOUT = (5.0, 30.0)  # 모든 KIS HTTP 호출의 (connect, read) 타임아웃
 _last_auth_time = datetime.now()
 _autoReAuth = False
 _last_svr = None  # 마지막으로 auth()를 호출한 서버 구분 (prod:실전, vps:모의)
@@ -246,7 +247,7 @@ def auth(svr='prod', product=_cfg['my_prod'], url=None):
     # print("saved_token: ", saved_token)
     if saved_token is None:  # 기존 발급 토큰 확인이 안되면 발급처리
         url = f'{_cfg[svr]}/oauth2/tokenP'
-        res = requests.post(url, data=json.dumps(p), headers=_getBaseHeader())  # 토큰 발급
+        res = requests.post(url, data=json.dumps(p), headers=_getBaseHeader(), timeout=REQ_TIMEOUT)  # 토큰 발급
         rescode = res.status_code
         if rescode == 200:  # 토큰 정상 발급
             my_token = _getResultObject(res.json()).access_token  # 토큰값 가져오기
@@ -309,7 +310,7 @@ def getTREnv():
 def set_order_hash_key(h, p):
     url = f"{getTREnv().my_url}/uapi/hashkey"  # hashkey 발급 API URL
 
-    res = requests.post(url, data=json.dumps(p), headers=h)
+    res = requests.post(url, data=json.dumps(p), headers=h, timeout=REQ_TIMEOUT)
     rescode = res.status_code
     if rescode == 200:
         h['hashkey'] = _getResultObject(res.json()).HASH
@@ -415,9 +416,9 @@ def _url_fetch(api_url, ptr_id, tr_cont, params, appendHeaders=None, postFlag=Fa
 
     if (postFlag):
         #if (hashFlag): set_order_hash_key(headers, params)
-        res = requests.post(url, headers=headers, data=json.dumps(params))
+        res = requests.post(url, headers=headers, data=json.dumps(params), timeout=REQ_TIMEOUT)
     else:
-        res = requests.get(url, headers=headers, params=params)
+        res = requests.get(url, headers=headers, params=params, timeout=REQ_TIMEOUT)
 
     if res.status_code == 200:
         ar = APIResp(res)
