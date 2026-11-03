@@ -1,3 +1,4 @@
+import asyncio
 from abc import ABC, abstractmethod
 import ast
 from typing import Dict, Any, List
@@ -25,7 +26,15 @@ FUNCTION_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 _ORDER_API_PREFIXES = ("order", "daytime_order")
 _ORDER_API_NAMES = frozenset({"buy", "sell"})
 _ORDER_READ_EXCEPTIONS = frozenset({"order_resv_list"})
+ORDER_TIMEOUT = 120  # 주문 계열 자식 실행 타임아웃(초): 토큰 발급+주문 합산
+DEFAULT_TIMEOUT = 15  # 조회 계열 타임아웃(초)
 
+
+def _is_order_api_type(api_type: str) -> bool:
+    """주문(파괴적) API 여부. 조회 예외(order_resv_list 등)는 제외."""
+    return (api_type in _ORDER_API_NAMES
+            or api_type.startswith(_ORDER_API_PREFIXES)) \
+        and api_type not in _ORDER_READ_EXCEPTIONS
 # 다운로드 고정 (이슈 #3): main 추적 금지. API 예제는 검증된 커밋 SHA로 고정하고
 # SHA-256 매니페스트(api_hashes.json)로 검증 후 디스크 캐시에 보관한다.
 # kis_auth는 포크 수정본을 패키지에 번들(bundled_kis_auth.py)하므로 내려받지 않는다.
@@ -57,7 +66,7 @@ if __name__ == "__main__":
     for _k, _v in _mcp_cfg["params"].items():
         if isinstance(_v, dict) and "__expr__" in _v:
             _expr = _v["__expr__"]
-            _m = re.match(r"^ka\._TRENV\.(my_\w+)$", _expr) if isinstance(_expr, str) else None
+            _m = re.match(r"^ka\\._TRENV\\.(my_\\w+)$", _expr) if isinstance(_expr, str) else None
             if not _m:
                 raise ValueError(f"Invalid expression: {_expr}")
             _kwargs[_k] = getattr(ka._TRENV, _m.group(1))
@@ -76,6 +85,31 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
+        import json as _json
+        # 주문 거절·빈 결과의 구조화 실패 판정 (이슈 #4): rt_cd 불량 dict,
+        # 주문 API의 빈 결과(DataFrame 등)는 exit 2로 실패를 명시한다.
+        _parts = list(result) if isinstance(result, tuple) else [result]
+        _failed = False
+        _fail_reason = ""
+        for _p in _parts:
+            if isinstance(_p, dict):
+                _rt = _p.get("rt_cd", _p.get("RT_CD", "0"))
+                if str(_rt) not in ("0", ""):
+                    _failed = True
+                    _fail_reason = "rt_cd=%s msg=%s" % (
+                        _rt, _p.get("msg1", _p.get("msg", "")))
+                    break
+        if not _failed and _mcp_cfg.get("is_order"):
+            _dfs = [_p for _p in _parts if hasattr(_p, "empty")]
+            _contents = [_p for _p in _parts
+                         if not hasattr(_p, "empty") and not isinstance(_p, dict)
+                         and _p is not None and _p != "" and _p != [] and _p != {}]
+            if _dfs and all(len(_p) == 0 for _p in _dfs) and not _contents:
+                _failed = True
+                _fail_reason = "empty order result (likely rejected)"
+        if _failed:
+            print(_json.dumps({"ok": False, "error": _fail_reason}, ensure_ascii=False))
+            sys.exit(2)
         if isinstance(result, tuple):
             output = {}
             for i, item in enumerate(result):
@@ -84,7 +118,6 @@ if __name__ == "__main__":
                 else:
                     output[f"output{i+1}"] = str(item)
 
-            import json as _json
             print(_json.dumps(output, ensure_ascii=False, indent=2))
         elif hasattr(result, 'empty') and not result.empty:
             print(result.to_json(orient='records', force_ascii=False))
@@ -371,6 +404,7 @@ class ApiExecutor:
                 "env_dv": env_dv,
                 "params": cls._serialize_params_for_runner(adjusted_params),
                 "has_stock_name": "stock_name" in params,
+                "is_order": _is_order_api_type(api_type),
             }
             params_json_path = os.path.join(temp_dir, "params.json")
             with open(params_json_path, "w", encoding="utf-8") as f:
@@ -404,8 +438,11 @@ class ApiExecutor:
                     env[name] = os.environ[name]
         return env
 
-    def _execute_code(self, temp_dir: str, timeout: int = 15) -> Dict[str, Any]:
-        """코드 실행"""
+    def _execute_code(self, temp_dir: str, api_type: str = None, timeout: int = None) -> Dict[str, Any]:
+        """코드 실행. 주문 계열은 긴 타임아웃을 쓰고 초과 시 상태불명을 반환한다."""
+        is_order = _is_order_api_type(api_type) if api_type else False
+        if timeout is None:
+            timeout = ORDER_TIMEOUT if is_order else DEFAULT_TIMEOUT
         try:
             # 실행할 파일 경로 (상대 경로로 변경)
             api_code_path = "api_code.py"
@@ -437,6 +474,13 @@ class ApiExecutor:
                 }
 
         except subprocess.TimeoutExpired:
+            if is_order:
+                return {
+                    "success": False,
+                    "order_state": "unknown",
+                    "error": (f"ORDER_STATE_UNKNOWN: 주문 실행이 {timeout}초를 초과했다. "
+                              f"접수 여부가 불명이므로 재주문하지 말고 주문/체결 조회로 확인하라.")
+                }
             return {
                 "success": False,
                 "error": f"실행 시간 초과 ({timeout}초)"
@@ -447,18 +491,21 @@ class ApiExecutor:
                 "error": f"실행 중 오류: {str(e)}"
             }
 
-    def _cleanup_temp_directory(self, temp_dir: str):
-        """임시 디렉토리 정리"""
+    def _cleanup_temp_directory(self, temp_dir: str) -> bool:
+        """임시 디렉토리 정리. 정리 성공 여부를 반환한다."""
         try:
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
+            return not os.path.exists(temp_dir)
         except Exception as e:
             print(f"임시 디렉토리 정리 실패: {temp_dir}, 오류: {str(e)}")
+            return False
 
     async def execute_api(self, ctx: Context, api_type: str, params: Dict[str, Any], github_url: str) -> Dict[str, Any]:
-        """API 실행 메인 함수"""
+        """API 실행 메인 함수 (차단 호출은 스레드로 분리해 이벤트 루프를 막지 않는다)"""
         temp_dir = None
         start_time = time.time()
+        result = None
 
         try:
             await ctx.info(f"API 실행 시작: {api_type}")
@@ -478,14 +525,16 @@ class ApiExecutor:
             if not self._ensure_kis_auth(temp_dir):
                 raise Exception("kis_auth.py 번들 준비 실패")
 
-            # 3. API 코드 다운로드
-            api_code_path = self._download_api_code(github_url, temp_dir, api_type)
+            # 3. API 코드 준비 (고정 ref + 검증 + 캐시)
+            api_code_path = await asyncio.to_thread(
+                self._download_api_code, github_url, temp_dir, api_type)
 
             # 4. 코드 수정
             self._modify_api_code(api_code_path, params, api_type)
 
-            # 5. 코드 실행
-            execution_result = self._execute_code(temp_dir)
+            # 5. 코드 실행 (주문 계열은 긴 타임아웃, 자동 재시도 없음)
+            execution_result = await asyncio.to_thread(
+                self._execute_code, temp_dir, api_type)
 
             # 6. 실행 시간 계산
             execution_time = time.time() - start_time
@@ -506,12 +555,12 @@ class ApiExecutor:
                 result["data"] = execution_result["output"]
             else:
                 result["error"] = execution_result["error"]
-
-            return result
+                if "order_state" in execution_result:
+                    result["order_state"] = execution_result["order_state"]
 
         except Exception as e:
             await ctx.error(f"API 실행 중 오류: {str(e)}")
-            return {
+            result = {
                 "success": False,
                 "api_type": api_type,
                 "params": params,
@@ -522,9 +571,11 @@ class ApiExecutor:
                 "cleanup_success": False
             }
         finally:
-            # 8. 임시 디렉토리 정리
-            if temp_dir:
-                self._cleanup_temp_directory(temp_dir)
+            # 8. 임시 디렉토리 정리 (실제 결과를 기록한다)
+            if isinstance(result, dict):
+                result["cleanup_success"] = (
+                    self._cleanup_temp_directory(temp_dir) if temp_dir else True)
+        return result
 
 
 class BaseTool(ABC):
@@ -559,9 +610,7 @@ class BaseTool(ABC):
     @staticmethod
     def _is_order_api(api_type: str) -> bool:
         """주문(파괴적) API 여부. 조회 예외(order_resv_list 등)는 제외."""
-        return (api_type in _ORDER_API_NAMES
-                or api_type.startswith(_ORDER_API_PREFIXES)) \
-            and api_type not in _ORDER_READ_EXCEPTIONS
+        return _is_order_api_type(api_type)
 
     @classmethod
     def _check_execution_policy(cls, api_type: str, params: dict, env=None):
@@ -731,6 +780,8 @@ class BaseTool(ABC):
             
             # 5. 실제 실행 (래핑 함수 선택 → OPEN API 호출)
             data = await self._run_api(ctx, api_type, params)
+            if isinstance(data, dict) and data.get("success") is False:
+                return {"ok": False, "error": data.get("error", "API 실행 실패"), "data": data}
             return {"ok": True, "data": data}
 
         except Exception as e:
@@ -745,7 +796,7 @@ class BaseTool(ABC):
             github_url = api_info.get('github_url')
 
             if not github_url:
-                return {"error": f"GitHub URL이 없습니다: {api_type}"}
+                return {"success": False, "error": f"GitHub URL이 없습니다: {api_type}"}
 
             # ApiExecutor를 사용하여 API 실행
             result = await self.api_executor.execute_api(
@@ -758,7 +809,7 @@ class BaseTool(ABC):
             return result
 
         except Exception as e:
-            return {"error": f"API 실행 중 오류: {str(e)}"}
+            return {"success": False, "error": f"API 실행 중 오류: {str(e)}"}
     
     async def _process_stock_name(self, ctx: Context, params: Dict[str, Any]) -> Dict[str, Any]:
         """종목명/종목코드 자동 처리 (stock_name이 있으면 자동으로 pdno 변환)"""
