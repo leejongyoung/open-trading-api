@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from abc import ABC, abstractmethod
 import ast
 from typing import Dict, Any, List
@@ -15,6 +16,8 @@ from fastmcp import FastMCP, Context
 from module.plugin import MasterFileManager
 from module.plugin.database import Database
 import module.factory as factory
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_ENV_DV = frozenset({"real", "demo"})
 TRENV_EXPR_PATTERN = re.compile(r"^ka\._TRENV\.\w+$")
@@ -263,7 +266,7 @@ class ApiExecutor:
             shutil.copyfile(BUNDLED_KIS_AUTH_FILE, os.path.join(temp_dir, "kis_auth.py"))
             return True
         except Exception as e:
-            print(f"kis_auth 번들 복사 실패: {str(e)}")
+            logger.warning(f"kis_auth 번들 복사 실패: {str(e)}")
             return False
 
     def _download_api_code(self, github_url: str, temp_dir: str, api_type: str) -> str:
@@ -313,10 +316,10 @@ class ApiExecutor:
             discovered_mappings.append(f"{param_name}=xxx.{trenv_attr}")
         
         if discovered_mappings:
-            print(f"[🎯자동발견] {len(discovered_mappings)}개 매핑: {', '.join(discovered_mappings)}")
-            print(f"[🎯자동생성] {len(dynamic_mappings)}개 파라미터: {list(dynamic_mappings.keys())}")
+            logger.info(f"[🎯자동발견] {len(discovered_mappings)}개 매핑: {', '.join(discovered_mappings)}")
+            logger.info(f"[🎯자동생성] {len(dynamic_mappings)}개 파라미터: {list(dynamic_mappings.keys())}")
         else:
-            print("[🎯자동발견] .my_xxx 패턴 없음 - 조회성 API로 추정")
+            logger.info("[🎯자동발견] .my_xxx 패턴 없음 - 조회성 API로 추정")
         
         
         return dynamic_mappings
@@ -361,7 +364,7 @@ class ApiExecutor:
             adjusted_params = {}
             for key, value in params.items():
                 if key not in function_params and isinstance(key, str) and key.lower() in function_params:
-                    print(f"[정규화] {function_name} 함수 파라미터 {key} → {key.lower()}")
+                    logger.info(f"[정규화] {function_name} 함수 파라미터 {key} → {key.lower()}")
                     key = key.lower()
                 adjusted_params[key] = value
 
@@ -370,14 +373,14 @@ class ApiExecutor:
                 # 함수가 max_depth를 받는 경우에만 처리
                 if 'max_depth' not in adjusted_params:
                     adjusted_params['max_depth'] = 1
-                    print(f"[기본값] {function_name} 함수에 max_depth=1 설정")
+                    logger.info(f"[기본값] {function_name} 함수에 max_depth=1 설정")
                 else:
-                    print(f"[사용자 설정] {function_name} 함수에 max_depth={adjusted_params['max_depth']} 사용")
+                    logger.info(f"[사용자 설정] {function_name} 함수에 max_depth={adjusted_params['max_depth']} 사용")
             else:
                 # 함수가 max_depth를 받지 않는 경우 제거
                 if 'max_depth' in adjusted_params:
                     del adjusted_params['max_depth']
-                    print(f"[제거] {function_name} 함수는 max_depth 파라미터를 지원하지 않아 제거함")
+                    logger.info(f"[제거] {function_name} 함수는 max_depth 파라미터를 지원하지 않아 제거함")
 
             # 🆕 동적으로 trenv 패턴 추출
             dynamic_mappings = cls._extract_trenv_params_from_example(code)
@@ -396,18 +399,18 @@ class ApiExecutor:
                     if param_name in adjusted_params:
                         original_value = adjusted_params[param_name]
                         adjusted_params[param_name] = correct_value
-                        print(f"[보안강제] {function_name} 함수의 {param_name}='{original_value}' → {correct_value} (LLM값 무시)")
+                        logger.warning(f"[보안강제] {function_name} 함수의 {param_name}='{original_value}' → {correct_value} (LLM값 무시)")
                     else:
                         adjusted_params[param_name] = correct_value
-                        print(f"[자동설정] {function_name} 함수에 {param_name}={correct_value} 설정")
+                        logger.info(f"[자동설정] {function_name} 함수에 {param_name}={correct_value} 설정")
 
             # 거래소ID구분코드 처리 (API 타입 기반 추론)
             if 'excg_id_dvsn_cd' in function_params and 'excg_id_dvsn_cd' not in adjusted_params:
                 if api_type.startswith('domestic'):
                     adjusted_params['excg_id_dvsn_cd'] = 'KRX'
-                    print(f"[추론] 국내 API({api_type})로 판단하여 excg_id_dvsn_cd='KRX' 설정")
+                    logger.info(f"[추론] 국내 API({api_type})로 판단하여 excg_id_dvsn_cd='KRX' 설정")
                 else:
-                    print(f"[경고] {api_type} API에서 excg_id_dvsn_cd 파라미터가 필요합니다. (예: NASD, NYSE, KRX)")
+                    logger.warning(f"[경고] {api_type} API에서 excg_id_dvsn_cd 파라미터가 필요합니다. (예: NASD, NYSE, KRX)")
                     # overseas_stock 등은 사용자가 명시적으로 제공해야 함
 
             # 4b. 러너 전달 제외 키 정리 (이슈 #7): 내부 메타(_*)와 종목명 별칭은
@@ -426,9 +429,9 @@ class ApiExecutor:
             if "env_dv" in function_params:
                 adjusted_params["env_dv"] = env_dv
             if env_dv == "demo":
-                print(f"[모의투자] {function_name} 함수에 ka.auth(\"vps\") 적용")
+                logger.info(f"[모의투자] {function_name} 함수에 ka.auth(\"vps\") 적용")
             else:
-                print(f"[실전투자] {function_name} 함수에 ka.auth() 적용")
+                logger.info(f"[실전투자] {function_name} 함수에 ka.auth() 적용")
 
             runner_code = API_RUNNER_TEMPLATE.replace("__FUNCTION_NAME__", function_name)
 
@@ -532,7 +535,7 @@ class ApiExecutor:
                 shutil.rmtree(temp_dir, ignore_errors=True)
             return not os.path.exists(temp_dir)
         except Exception as e:
-            print(f"임시 디렉토리 정리 실패: {temp_dir}, 오류: {str(e)}")
+            logger.warning(f"임시 디렉토리 정리 실패: {temp_dir}, 오류: {str(e)}")
             return False
 
     async def execute_api(self, ctx: Context, api_type: str, params: Dict[str, Any], github_url: str) -> Dict[str, Any]:
