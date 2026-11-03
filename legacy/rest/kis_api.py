@@ -6,6 +6,7 @@ Created on Mon Apr 18 11:23:04 2022
 """
 
 import time, copy
+import re
 import yaml
 import requests
 import json
@@ -16,7 +17,7 @@ from collections import namedtuple
 from datetime import datetime
 
 with open(r'kisdev_vi.yaml', encoding='UTF-8') as f:
-    _cfg = yaml.load(f, Loader=yaml.FullLoader)
+    _cfg = yaml.safe_load(f)
 
 _TRENV = tuple()
 REQ_TIMEOUT = (5.0, 30.0)  # 모든 KIS HTTP 호출의 (connect, read) 타임아웃
@@ -31,6 +32,19 @@ _base_headers = {
     "charset": "UTF-8",
     'User-Agent': _cfg['my_agent'] 
 }
+
+_SECRET_KEYS = ('authorization', 'appsecret', 'appkey', 'approval_key', 'key', 'iv', 'token', 'secretkey')
+_MASKED = '***'
+
+def _redact(obj):
+    if isinstance(obj, dict):
+        return {k: (_MASKED if isinstance(k, str) and k.lower() in _SECRET_KEYS else _redact(v)) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_redact(v) for v in obj]
+    return obj
+
+def _redacted_headers(headers):
+    return _redact(dict(headers))
     
 
 def _getBaseHeader():
@@ -116,8 +130,7 @@ def auth(svr='prod', product='01'):
     if rescode == 200:
         my_token = _getResultObject(res.json()).access_token
     else:
-        print('Get Authentification token fail!\nYou have to restart your app!!!')  
-        return
+        raise RuntimeError(f'Get Authentification token fail! (HTTP {rescode}): {res.text[:200]}')
  
     changeTREnv(f"Bearer {my_token}", svr, product)
     
@@ -134,7 +147,7 @@ def auth(svr='prod', product='01'):
 #end of initialize
 def reAuth(svr='prod', product='01'):
     n2 = datetime.now()
-    if (n2-_last_auth_time).seconds >= 86400:
+    if (n2-_last_auth_time).total_seconds() >= 86400:
         auth(svr, product)
 
 def getEnv():
@@ -246,8 +259,8 @@ def _url_fetch(api_url, ptr_id, params, appendHeaders=None, postFlag=False, hash
     if(_DEBUG):
         print("< Sending Info >")
         print(f"URL: {url}, TR: {tr_id}")
-        print(f"<header>\n{headers}")
-        print(f"<body>\n{params}")
+        print(f"<header>\n{_redacted_headers(headers)}")
+        print(f"<body>\n{_redact(params) if isinstance(params, dict) else params}")
         
     if (postFlag):
         if(hashFlag): set_order_hash_key(headers, params)

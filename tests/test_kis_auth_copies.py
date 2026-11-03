@@ -388,3 +388,85 @@ def test_legacy_signing_notice_defined(rel):
                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
     assert "stocksigningnotice" not in called - defined
     assert "stocksigningnotice_domestic" in called
+
+
+# ---- 이슈 #18: 시크릿 마스킹·원자적 저장 ----
+
+def test_save_token_mode_0600(any_copy):
+    import os
+    import stat
+    from datetime import datetime, timedelta
+    _, mod = any_copy
+    future = (datetime.today() + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
+    mod.save_token('TOK123SECRET', future, 'prod')
+    path = mod._token_path('prod')
+    assert os.path.isfile(path)
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    content = open(path, encoding='utf-8').read()
+    assert 'TOK123SECRET' in content
+    assert mod.read_token('prod') == 'TOK123SECRET'
+    leftovers = [f for f in os.listdir(os.path.dirname(path) or '.')
+                 if f.startswith('.kis_token_')]
+    assert leftovers == []
+
+
+def test_no_full_loader():
+    rels = list(COPIES.values()) + ['legacy/rest/kis_api.py']
+    for rel in rels:
+        src = (REPO_ROOT / rel).read_text(encoding='utf-8')
+        assert 'FullLoader' not in src, rel
+        assert 'safe_load' in src, rel
+
+
+def test_token_placeholder_uses_with_block():
+    for name, rel in COPIES.items():
+        src = (REPO_ROOT / rel).read_text(encoding='utf-8')
+        assert 'open(token_tmp, "w+")' not in src, name
+
+
+def test_ws_log_masks_secrets(modern_copy):
+    import json
+    _, mod = modern_copy
+    for helper in ('_mask_ws_raw', '_masked_json', '_redacted_headers'):
+        assert callable(getattr(mod, helper, None)), helper
+    raw = json.dumps({
+        'header': {'tr_id': 'H0STCNT0'},
+        'body': {'input': {
+            'approval_key': 'SENTINEL_APPROVAL_123',
+            'key': 'SENTINEL_KEY_456',
+            'iv': 'SENTINEL_IV_789',
+        }},
+    })
+    masked_raw = mod._mask_ws_raw(raw)
+    assert 'SENTINEL_APPROVAL_123' not in masked_raw
+    assert 'SENTINEL_KEY_456' not in masked_raw
+    assert 'SENTINEL_IV_789' not in masked_raw
+    assert '***' in masked_raw
+    masked_json = mod._masked_json(raw)
+    assert 'SENTINEL_APPROVAL_123' not in masked_json
+    assert 'SENTINEL_KEY_456' not in masked_json
+    assert 'SENTINEL_IV_789' not in masked_json
+    assert '***' in masked_json
+    masked_headers = mod._redacted_headers({
+        'authorization': 'SENTINEL_AUTH_000',
+        'appsecret': 'SENTINEL_APPSECRET_111',
+        'tr_id': 'H0STCNT0',
+    })
+    assert 'SENTINEL_AUTH_000' not in str(masked_headers)
+    assert 'SENTINEL_APPSECRET_111' not in str(masked_headers)
+    assert '***' in str(masked_headers)
+
+
+def test_legacy_rest_no_token_print():
+    src = (REPO_ROOT / 'legacy/rest/kis_auth.py').read_text(encoding='utf-8')
+    assert 'print("saved_token' not in src
+    assert 'print(gettoken)' not in src
+
+
+def test_legacy_ws_masks_approval_key():
+    ws_dir = REPO_ROOT / 'legacy/websocket/python'
+    rels = sorted(p for p in ws_dir.glob('*.py'))
+    assert len(rels) == 9
+    for p in rels:
+        src = p.read_text(encoding='utf-8')
+        assert 'print("approval_key [%s]" % (g_approval_key))' not in src, p.name
