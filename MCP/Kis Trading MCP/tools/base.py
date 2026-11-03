@@ -24,6 +24,7 @@ API_RUNNER_TEMPLATE = """
 # MCP API runner (fixed template)
 if __name__ == "__main__":
     import json
+    import re
     import sys
     import kis_auth as ka
 
@@ -40,9 +41,10 @@ if __name__ == "__main__":
     for _k, _v in _mcp_cfg["params"].items():
         if isinstance(_v, dict) and "__expr__" in _v:
             _expr = _v["__expr__"]
-            if not _expr.startswith("ka._TRENV."):
+            _m = re.match(r"^ka\._TRENV\.(my_\w+)$", _expr) if isinstance(_expr, str) else None
+            if not _m:
                 raise ValueError(f"Invalid expression: {_expr}")
-            _kwargs[_k] = eval(_expr)
+            _kwargs[_k] = getattr(ka._TRENV, _m.group(1))
         else:
             _kwargs[_k] = _v
 
@@ -114,17 +116,23 @@ class ApiExecutor:
             raise ValueError(f"Invalid function name: {function_name}")
         return function_name
 
+    _SCALAR_TYPES = (str, int, float, bool, type(None))
+
     @classmethod
     def _serialize_params_for_runner(cls, params: Dict[str, Any]) -> Dict[str, Any]:
-        """params.json용 안전한 직렬화 (trenv 표현식은 화이트리스트)"""
+        """params.json용 안전한 직렬화 (trenv 표현식은 화이트리스트, 비스칼라·__expr__ 거부)"""
         serialized = {}
         for key, value in params.items():
             if isinstance(value, str) and value.startswith("ka._TRENV."):
                 if not TRENV_EXPR_PATTERN.match(value):
                     raise ValueError(f"Invalid trenv expression: {value}")
                 serialized[key] = {"__expr__": value}
-            else:
+            elif isinstance(value, dict) and "__expr__" in value:
+                raise ValueError(f"__expr__ param rejected: {key}")
+            elif isinstance(value, cls._SCALAR_TYPES):
                 serialized[key] = value
+            else:
+                raise ValueError(f"Non-scalar param rejected: {key} ({type(value).__name__})")
         return serialized
 
     def _create_temp_directory(self, request_id: str) -> str:
@@ -319,19 +327,35 @@ class ApiExecutor:
         except Exception as e:
             raise Exception(f"코드 수정 실패: {str(e)}")
 
+    @staticmethod
+    def _minimal_child_env() -> Dict[str, str]:
+        """자식 프로세스용 최소 환경변수 (부모 시크릿 상속 차단)"""
+        env: Dict[str, str] = {}
+        for name in ("PATH", "HOME", "LANG", "LC_ALL", "PYTHONIOENCODING", "TMPDIR", "TEMP", "TMP"):
+            if name in os.environ:
+                env[name] = os.environ[name]
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        if sys.platform == "win32":
+            for name in ("SYSTEMROOT", "WINDIR", "PATHEXT", "COMSPEC",
+                          "USERPROFILE", "HOMEDRIVE", "HOMEPATH"):
+                if name in os.environ:
+                    env[name] = os.environ[name]
+        return env
+
     def _execute_code(self, temp_dir: str, timeout: int = 15) -> Dict[str, Any]:
         """코드 실행"""
         try:
             # 실행할 파일 경로 (상대 경로로 변경)
             api_code_path = "api_code.py"
 
-            # subprocess로 코드 실행
+            # subprocess로 코드 실행 (최소 env 명시: 부모 시크릿 미상속)
             result = subprocess.run(
                 [self.venv_python, api_code_path],
                 cwd=temp_dir,
                 capture_output=True,
                 text=True,
-                timeout=timeout
+                timeout=timeout,
+                env=self._minimal_child_env()
             )
 
             if result.returncode == 0:
