@@ -40,7 +40,7 @@ BACKTEST_ERRORS = BOUNDARY_ERRORS
 def create_client():
     """KIS API 인증 및 LeanClient 생성"""
     try:
-        auth = KISAuth.from_env()
+        auth = KISAuth.from_env(mode="paper")
         data_provider = KISDataProvider(auth)
         mode_str = "모의투자" if auth.is_paper else "실전투자"
         print(f"  ✓ KIS 인증 ({mode_str})")
