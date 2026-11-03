@@ -8,6 +8,8 @@ import hashlib
 import json
 import logging
 import os
+import re
+import tempfile
 import time
 from base64 import b64decode
 from collections import namedtuple
@@ -41,14 +43,17 @@ token_tmp = os.path.join(
     config_root, f"KIS{datetime.today().strftime('%Y%m%d')}"
 )  # 토큰 로컬저장시 파일명 년월일
 
-# 접근토큰 관리하는 파일 존재여부 체크, 없으면 생성
-if os.path.exists(token_tmp) == False:
-    f = open(token_tmp, "w+")
+with open(token_tmp, "a", encoding="utf-8"):
+    pass
+try:
+    os.chmod(token_tmp, 0o600)
+except OSError:
+    pass
 
 # 앱키, 앱시크리트, 토큰, 계좌번호 등 저장관리, 자신만의 경로와 파일명으로 설정하시기 바랍니다.
 # pip install PyYAML (패키지설치)
 with open(os.path.join(config_root, "kis_devlp.yaml"), encoding="UTF-8") as f:
-    _cfg = yaml.load(f, Loader=yaml.FullLoader)
+    _cfg = yaml.safe_load(f)
 
 _TRENV = tuple()
 REQ_TIMEOUT = (5.0, 30.0)  # 모든 KIS HTTP 호출의 (connect, read) 타임아웃
@@ -68,6 +73,51 @@ _base_headers = {
     "charset": "UTF-8",
     "User-Agent": _cfg["my_agent"],
 }
+
+_SECRET_KEYS = ("authorization", "appsecret", "appkey", "approval_key", "key", "iv", "token", "secretkey")
+_MASKED = "***"
+
+
+def _redact(obj):
+    if isinstance(obj, dict):
+        return {k: (_MASKED if isinstance(k, str) and k.lower() in _SECRET_KEYS else _redact(v)) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_redact(v) for v in obj]
+    return obj
+
+
+def _redacted_headers(headers):
+    return _redact(dict(headers))
+
+
+def _masked_json(payload):
+    try:
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (ValueError, TypeError):
+                return re.sub(r'("(?:approval_key|authorization|appsecret|appkey|secretkey|token|key|iv)"\s*:\s*")[^"]*(")', r"\1***\2", payload)
+        return json.dumps(_redact(payload))
+    except (ValueError, TypeError):
+        return "***"
+
+
+def _mask_ws_raw(raw):
+    if isinstance(raw, (bytes, bytearray)):
+        try:
+            raw = bytes(raw).decode("utf-8", "replace")
+        except Exception:
+            return "***"
+    if not isinstance(raw, str):
+        return "***"
+    s = raw.strip()
+    if s.startswith("{"):
+        try:
+            return json.dumps(_redact(json.loads(s)))
+        except (ValueError, TypeError):
+            pass
+    return re.sub(r'("(?:approval_key|authorization|appsecret|appkey|secretkey|token|key|iv)"\s*:\s*")[^"]*(")', r"\1***\2", raw)
+
 
 
 # 토큰 발급 받아 저장 (토큰값, 토큰 유효시간,1일, 6시간 이내 발급신청시는 기존 토큰값과 동일, 발급시 알림톡 발송)
@@ -92,11 +142,30 @@ def save_token(my_token, my_expired, svr=None):
     # print('Save token date: ', valid_date)
     svr = svr or _last_svr
     path = _token_path(svr) if svr else token_tmp
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(f"token: {my_token}\n")
-        f.write(f"valid-date: {valid_date}\n")
-        if svr:
-            f.write(f"appkey-sha: {_appkey_fingerprint(svr)}\n")
+    content = f"token: {my_token}\nvalid-date: {valid_date}\n"
+    if svr:
+        content += f"appkey-sha: {_appkey_fingerprint(svr)}\n"
+    d = os.path.dirname(path) or "."
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        pass
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".kis_token_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # 토큰 확인 (토큰값, 토큰 유효시간_1일, 6시간 이내 발급신청시는 기존 토큰값과 동일, 발급시 알림톡 발송)
@@ -123,7 +192,7 @@ def _read_token_file(path, svr=None):
     try:
         # 토큰이 저장된 파일 읽기
         with open(path, encoding="UTF-8") as f:
-            tkg_tmp = yaml.load(f, Loader=yaml.FullLoader)
+            tkg_tmp = yaml.safe_load(f)
 
         if svr:
             expected = _appkey_fingerprint(svr)
@@ -520,8 +589,8 @@ def _url_fetch(
     if _DEBUG:
         print("< Sending Info >")
         print(f"URL: {url}, TR: {tr_id}")
-        print(f"<header>\n{headers}")
-        print(f"<body>\n{params}")
+        print(f"<header>\n{_redacted_headers(headers)}")
+        print(f"<body>\n{_redact(params) if isinstance(params, dict) else params}")
 
     if postFlag:
         # if (hashFlag): set_order_hash_key(headers, params)
@@ -779,7 +848,7 @@ class KISWebSocket:
     # private
     async def __subscriber(self, ws: websockets.ClientConnection):
         async for raw in ws:
-            logging.info("received message >> %s" % raw)
+            logging.info("received message >> %s", _mask_ws_raw(raw))
             show_result = False
 
             df = pd.DataFrame()
@@ -882,7 +951,7 @@ class KISWebSocket:
 
         add_data_map(tr_id=msg["body"]["input"]["tr_id"], columns=columns)
 
-        logging.info("send message >> %s" % json.dumps(msg))
+        logging.info("send message >> %s", _masked_json(msg))
 
         await ws.send(json.dumps(msg))
         smart_sleep()
