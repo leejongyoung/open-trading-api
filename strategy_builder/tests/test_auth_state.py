@@ -77,3 +77,25 @@ def test_clear_token_file_uses_ka_helper(mods):
     ts = st.TradingState()
     ts._clear_token_file()
     assert removed == [1]
+
+
+def test_restore_skips_live_session(mods, tmp_path, monkeypatch):
+    """실전 토큰이 캐시돼 있어도 재시작 때 자동 복원하지 않는다."""
+    ka, st = mods
+    ka.read_token = lambda *a: "DUMMY.LIVE.TOKEN"
+    monkeypatch.setattr(st.TradingState, "_detect_mode_from_token", lambda self: "prod")
+    monkeypatch.setattr(st.TradingState, "_save_mode_file", lambda self, m: None)
+    ts = st.TradingState()
+    assert ts.is_authenticated is False
+
+
+def test_restore_restores_paper_session(mods, tmp_path, monkeypatch):
+    ka, st = mods
+    ka.read_token = lambda *a: "DUMMY.PAPER.TOKEN"
+    monkeypatch.setattr(st.TradingState, "_detect_mode_from_token", lambda self: "vps")
+    monkeypatch.setattr(st.TradingState, "_save_mode_file", lambda self, m: None)
+    monkeypatch.setattr(ka, "auth", lambda svr: None)
+    monkeypatch.setattr(ka, "isPaperTrading", lambda: True)
+    monkeypatch.setattr(ka, "getTREnv", lambda: types.SimpleNamespace(my_url="https://openapivts.koreainvestment.com:29443"))
+    ts = st.TradingState()
+    assert ts.is_authenticated is True

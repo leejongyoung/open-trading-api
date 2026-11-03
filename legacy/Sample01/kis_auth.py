@@ -11,6 +11,7 @@ Created on Wed Feb 15 16:57:19 2023
 
 
 import time, copy
+import hashlib
 import yaml
 import requests
 import json
@@ -68,20 +69,54 @@ _base_headers = {
 
 
 # 토큰 발급 받아 저장 (토큰값, 토큰 유효시간,1일, 6시간 이내 발급신청시는 기존 토큰값과 동일, 발급시 알림톡 발송)
-def save_token(my_token, my_expired):
+def _token_path(svr):
+    return f"{token_tmp}_{svr}"
+
+
+def _appkey_fingerprint(svr):
+    """토큰 파일 귀속용 앱키 지문(sha256 앞 16자). 앱키가 바뀌면 기존 토큰을 폐기한다."""
+    try:
+        key = _cfg['my_app'] if svr == 'prod' else _cfg['paper_app']
+    except (KeyError, TypeError):
+        return ""
+    return hashlib.sha256(key.encode('utf-8')).hexdigest()[:16]
+
+
+def save_token(my_token, my_expired, svr=None):
     valid_date = datetime.strptime(my_expired, '%Y-%m-%d %H:%M:%S')
     # print('Save token date: ', valid_date)
-    with open(token_tmp, 'w', encoding='utf-8') as f:
+    svr = svr or _last_svr
+    path = _token_path(svr) if svr else token_tmp
+    with open(path, 'w', encoding='utf-8') as f:
         f.write(f'token: {my_token}\n')
         f.write(f'valid-date: {valid_date}\n')
+        if svr:
+            f.write(f'appkey-sha: {_appkey_fingerprint(svr)}\n')
 
 
 # 토큰 확인 (토큰값, 토큰 유효시간_1일, 6시간 이내 발급신청시는 기존 토큰값과 동일, 발급시 알림톡 발송)
-def read_token():
+# svr 지정 시 해당 서버의 토큰 파일만 확인
+def read_token(svr=None):
+    svr = svr or _last_svr
+    paths = [_token_path(svr)] if svr else [token_tmp]
+    for path in paths:
+        token = _read_token_file(path, svr)
+        if token:
+            return token
+    return None
+
+
+def _read_token_file(path, svr=None):
     try:
         # 토큰이 저장된 파일 읽기
-        with open(token_tmp, encoding='UTF-8') as f:
+        with open(path, encoding='UTF-8') as f:
             tkg_tmp = yaml.load(f, Loader=yaml.FullLoader)
+
+        if svr:
+            expected = _appkey_fingerprint(svr)
+            actual = (tkg_tmp.get('appkey-sha') or '') if isinstance(tkg_tmp, dict) else ''
+            if expected and actual and expected != actual:
+                return None  # 다른 앱키의 토큰은 폐기
 
         # 토큰 만료 일,시간
         exp_dt = datetime.strftime(tkg_tmp['valid-date'], '%Y-%m-%d %H:%M:%S')
@@ -98,6 +133,7 @@ def read_token():
     except Exception as e:
         # print('read token error: ', e)
         return None
+
 
 # 토큰 유효시간 체크해서 만료된 토큰이면 재발급처리
 def clear_saved_tokens():
@@ -206,7 +242,7 @@ def auth(svr='prod', product=_cfg['my_prod'], url=None):
     p["appsecret"] = _cfg[ak2]
 
     # 기존 발급된 토큰이 있는지 확인
-    saved_token = read_token()  # 기존 발급 토큰 확인
+    saved_token = read_token(svr)  # 기존 발급 토큰 확인
     # print("saved_token: ", saved_token)
     if saved_token is None:  # 기존 발급 토큰 확인이 안되면 발급처리
         url = f'{_cfg[svr]}/oauth2/tokenP'
@@ -215,7 +251,7 @@ def auth(svr='prod', product=_cfg['my_prod'], url=None):
         if rescode == 200:  # 토큰 정상 발급
             my_token = _getResultObject(res.json()).access_token  # 토큰값 가져오기
             my_expired= _getResultObject(res.json()).access_token_token_expired  # 토큰값 만료일시 가져오기
-            save_token(my_token, my_expired)  # 새로 발급 받은 토큰 저장
+            save_token(my_token, my_expired, svr)  # 새로 발급 받은 토큰 저장
         else:
             raise RuntimeError(
                 f'Get Authentification token fail! (HTTP {rescode}): {res.text[:200]}'
