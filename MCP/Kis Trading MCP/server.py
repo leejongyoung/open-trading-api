@@ -24,7 +24,8 @@ def main():
     logging.info("setup environment ...")
     env_config = setup_environment(env=env)
 
-    # KIS 설정 자동 생성 (템플릿 다운로드 + 값 덮어쓰기)
+    # KIS 설정 자동 생성 (기존 파일은 보존이 기본: 덮어쓰기는 함수 안의
+    # MCP_KIS_CONFIG_OVERWRITE=1 옵트인 + 필수 환경변수가 있을 때만 수행)
     logging.info("setup KIS configuration ...")
     if not setup_kis_config(force_update=env == "live"):
         logging.warning("KIS 설정 파일 생성에 실패했습니다. 수동으로 설정해주세요.")
