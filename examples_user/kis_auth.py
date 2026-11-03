@@ -4,6 +4,7 @@
 
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -75,6 +76,15 @@ def _token_path(svr):
     return f"{token_tmp}_{svr}"
 
 
+def _appkey_fingerprint(svr):
+    """토큰 파일 귀속용 앱키 지문(sha256 앞 16자). 앱키가 바뀌면 기존 토큰을 폐기한다."""
+    try:
+        key = _cfg["my_app"] if svr == "prod" else _cfg["paper_app"]
+    except (KeyError, TypeError):
+        return ""
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
 def save_token(my_token, my_expired, svr=None):
     # print(type(my_expired), my_expired)
     valid_date = datetime.strptime(my_expired, "%Y-%m-%d %H:%M:%S")
@@ -84,6 +94,8 @@ def save_token(my_token, my_expired, svr=None):
     with open(path, "w", encoding="utf-8") as f:
         f.write(f"token: {my_token}\n")
         f.write(f"valid-date: {valid_date}\n")
+        if svr:
+            f.write(f"appkey-sha: {_appkey_fingerprint(svr)}\n")
 
 
 # 토큰 확인 (토큰값, 토큰 유효시간_1일, 6시간 이내 발급신청시는 기존 토큰값과 동일, 발급시 알림톡 발송)
@@ -100,17 +112,23 @@ def read_token(svr=None):
         paths.append(token_tmp)
 
     for path in paths:
-        token = _read_token_file(path)
+        token = _read_token_file(path, svr)
         if token:
             return token
     return None
 
 
-def _read_token_file(path):
+def _read_token_file(path, svr=None):
     try:
         # 토큰이 저장된 파일 읽기
         with open(path, encoding="UTF-8") as f:
             tkg_tmp = yaml.load(f, Loader=yaml.FullLoader)
+
+        if svr:
+            expected = _appkey_fingerprint(svr)
+            actual = (tkg_tmp.get("appkey-sha") or "") if isinstance(tkg_tmp, dict) else ""
+            if expected and actual and expected != actual:
+                return None  # 다른 앱키의 토큰은 폐기
 
         # 토큰 만료 일,시간
         exp_dt = datetime.strftime(tkg_tmp["valid-date"], "%Y-%m-%d %H:%M:%S")

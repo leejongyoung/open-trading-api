@@ -50,7 +50,7 @@ def create_client():
     print("\n[1/4] 한국투자증권 API 인증 중...")
 
     try:
-        auth = KISAuth.from_env()
+        auth = KISAuth.from_env(mode="paper")
         data_provider = KISDataProvider(auth)
 
         mode_str = "모의투자" if auth.is_paper else "실전투자"

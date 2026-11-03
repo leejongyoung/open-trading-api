@@ -128,6 +128,11 @@ class TradingState:
             # JWT jti로 실제 모드 감지 (KIS_MODE 파일보다 우선)
             detected = self._detect_mode_from_token()
             mode = detected if detected else self._current_mode
+            if mode == "prod":
+                # 실전 세션은 재시작 때 자동 복원하지 않는다.
+                # /login에서 명시 인증해야 실전 상태가 된다.
+                logger.info("실전 토큰이 있지만 자동 복원하지 않습니다 (명시 로그인 필요)")
+                return
             ka.auth(svr=mode)
             self._authenticated = True
             self._current_mode = mode

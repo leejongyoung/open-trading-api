@@ -46,7 +46,7 @@ def create_live_client():
     print("\n[인증] 한국투자증권 API 인증 중...")
 
     try:
-        auth = KISAuth.from_env()
+        auth = KISAuth.from_env(mode="live")
         data_provider = KISDataProvider(auth)
         brokerage_provider = KISBrokerageProvider.from_auth(auth)
 
