@@ -404,11 +404,22 @@ class ApiExecutor:
             # 거래소ID구분코드 처리 (API 타입 기반 추론)
             if 'excg_id_dvsn_cd' in function_params and 'excg_id_dvsn_cd' not in adjusted_params:
                 if api_type.startswith('domestic'):
-                    adjusted_params['excg_id_dvsn_cd'] = '"KRX"'
+                    adjusted_params['excg_id_dvsn_cd'] = 'KRX'
                     print(f"[추론] 국내 API({api_type})로 판단하여 excg_id_dvsn_cd='KRX' 설정")
                 else:
                     print(f"[경고] {api_type} API에서 excg_id_dvsn_cd 파라미터가 필요합니다. (예: NASD, NYSE, KRX)")
                     # overseas_stock 등은 사용자가 명시적으로 제공해야 함
+
+            # 4b. 러너 전달 제외 키 정리 (이슈 #7): 내부 메타(_*)와 종목명 별칭은
+            # 함수 시그니처에 없을 때만 제거한다 (TypeError 방지).
+            stock_aliases = ("stock_name", "stock_name_kr", "korean_name", "company_name")
+            has_stock_name = any(k in params for k in stock_aliases)
+            adjusted_params = {
+                k: v for k, v in adjusted_params.items()
+                if not (k in stock_aliases and k not in function_params)
+                and not (isinstance(k, str) and k.startswith("_")
+                         and k not in function_params)
+            }
 
             # 5. env_dv 검증 (인증 분기 및 API 함수 인자용)
             env_dv = cls._validate_env_dv(adjusted_params.pop("env_dv", "demo"))
@@ -425,7 +436,7 @@ class ApiExecutor:
             params_payload = {
                 "env_dv": env_dv,
                 "params": cls._serialize_params_for_runner(adjusted_params),
-                "has_stock_name": "stock_name" in params,
+                "has_stock_name": has_stock_name,
                 "is_order": _is_order_api_type(api_type),
                 "product": _resolve_product(tool_name),
             }
@@ -858,11 +869,17 @@ class BaseTool(ABC):
             result = await self._find_stock_by_name_or_code(ctx, search_value)
             
             if result["found"]:
-                params["pdno"] = result["code"]
-                await ctx.info(f"종목번호 자동 찾기 성공: {search_value} → {result['code']}")
+                resolved = result["code"]
+                if params.get("pdno") and params["pdno"] != resolved:
+                    await ctx.warning(
+                        f"pdno 충돌: 명시값 {params['pdno']} 유지, "
+                        f"종목명 해석값 {resolved} 무시")
+                else:
+                    params["pdno"] = resolved
+                    await ctx.info(f"종목번호 자동 찾기 성공: {search_value} → {resolved}")
                 # 원본 검색값 보존
                 params["_original_search_value"] = search_value
-                params["_resolved_stock_code"] = result["code"]
+                params["_resolved_stock_code"] = resolved
             else:
                 await ctx.warning(f"종목을 찾을 수 없음: {search_value}")
                 # 종목을 찾지 못해도 원본 파라미터 유지

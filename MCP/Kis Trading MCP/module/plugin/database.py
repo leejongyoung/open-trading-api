@@ -182,11 +182,15 @@ class DatabaseEngine:
         try:
             query = session.query(model_class)
             
-            # 필터 적용
+            # 필터 적용 (%가 포함된 문자열은 LIKE 패턴으로 처리)
             if filters:
                 for field, value in filters.items():
                     if hasattr(model_class, field):
-                        query = query.filter(getattr(model_class, field) == value)
+                        column = getattr(model_class, field)
+                        if isinstance(value, str) and "%" in value:
+                            query = query.filter(column.like(value))
+                        else:
+                            query = query.filter(column == value)
                     else:
                         logger.warning(f"Field '{field}' not found in {model_class.__name__}")
             
