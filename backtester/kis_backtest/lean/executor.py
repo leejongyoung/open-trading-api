@@ -4,6 +4,7 @@ Docker 컨테이너로 Lean 백테스트 직접 실행. (Lean CLI 불필요)
 """
 
 import json
+import os
 import logging
 import subprocess
 from dataclasses import dataclass, field
@@ -15,8 +16,10 @@ from .project_manager import LeanProject
 
 logger = logging.getLogger(__name__)
 
-# Lean Docker 이미지
-LEAN_IMAGE = "quantconnect/lean:latest"
+# Lean Docker image is pinned by digest for reproducible, tamper-resistant pulls.
+# To bump: pull the new tag, run `docker images --digests quantconnect/lean`,
+# and replace the sha256 digest below with the new value.
+LEAN_IMAGE = "quantconnect/lean@sha256:a6dae7702a0762f3f6d7a9754c4e53e53b92f80a49db50161fed8e5dd94eaae4"
 
 
 @dataclass
@@ -194,9 +197,19 @@ class LeanExecutor:
         config_path = project_path / "lean-config.json"
         config_path.write_text(json.dumps(lean_config, indent=2))
         
-        # Docker 명령어 구성
+        # Docker 명령어 구성 (네트워크 차단 + 리소스 제한 + 권한 최소화)
         cmd = [
             "docker", "run", "--rm",
+            "--network", "none",
+            "--memory", "4g",
+            "--memory-swap", "4g",
+            "--cpus", "2.0",
+            "--pids-limit", "512",
+            "--cap-drop", "ALL",
+        ]
+        if hasattr(os, "getuid"):
+            cmd += ["--user", f"{os.getuid()}:{os.getgid()}"]
+        cmd += [
             "-v", f"{project_path}:/Algorithm:ro",
             "-v", f"{data_path}:/Data:ro",
             "-v", f"{results_path}:/Results",
