@@ -710,12 +710,13 @@ async def run_custom_backtest(request: CustomBacktestRequest) -> BacktestRespons
 
     # YAML 파싱 → StrategySchema (타입 안전, param_overrides 적용)
     try:
-        schema = StrategyFileLoader.load_schema_with_params(
+        schema = StrategyFileLoader.load_schema_from_string(
             request.yaml_content,
             param_overrides=request.param_overrides,
         )
     except _STRATEGY_LOAD_ERRORS as e:
-        raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
+        logger.error("Custom backtest strategy load failed: %s", e)
+        raise HTTPException(status_code=400, detail="Invalid YAML")
     
     # 워크스페이스 경로
     manager = LeanProjectManager()
