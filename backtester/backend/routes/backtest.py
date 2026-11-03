@@ -3,6 +3,7 @@
 Lean Docker 기반 백테스트 실행.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime, timedelta
@@ -284,7 +285,7 @@ def _classify_lean_error(error: str, output: str) -> str:
     return f"백테스트 실패: {error}"
 
 
-async def prepare_market_data(
+def _prepare_market_data_sync(
     symbols: List[str],
     start_date: str,
     end_date: str,
@@ -442,7 +443,18 @@ async def prepare_market_data(
     return result
 
 
-async def prepare_benchmark_data(
+async def prepare_market_data(
+    symbols: List[str],
+    start_date: str,
+    end_date: str,
+    workspace: Path,
+) -> dict:
+    """백테스트용 시장 데이터 준비 (KIS API → Lean CSV, 스레드 분리 실행)"""
+    return await asyncio.to_thread(
+        _prepare_market_data_sync, symbols, start_date, end_date, workspace)
+
+
+def _prepare_benchmark_data_sync(
     start_date: str,
     end_date: str,
     workspace: Path,
@@ -528,6 +540,17 @@ async def prepare_benchmark_data(
     except _KIS_DATA_ERRORS as e:
         logger.error(f"[Benchmark] 다운로드 실패: {type(e).__name__}")
         return False
+
+
+async def prepare_benchmark_data(
+    start_date: str,
+    end_date: str,
+    workspace: Path,
+    index_code: str = "0001",  # KOSPI
+) -> bool:
+    """KOSPI 벤치마크 데이터 준비 (스레드 분리 실행)"""
+    return await asyncio.to_thread(
+        _prepare_benchmark_data_sync, start_date, end_date, workspace, index_code)
 
 
 @router.post(
@@ -653,7 +676,7 @@ async def run_backtest(request: BacktestRequest) -> BacktestResponse:
         # 코드 저장
         project.main_py.write_text(code, encoding="utf-8")
 
-        lean_run = LeanExecutor.run(project)
+        lean_run = await asyncio.to_thread(LeanExecutor.run, project)
 
         if lean_run.success:
             result_data = _lean_run_to_api_response(
@@ -804,7 +827,7 @@ async def run_custom_backtest(request: CustomBacktestRequest) -> BacktestRespons
         # 코드 저장
         project.main_py.write_text(code, encoding="utf-8")
 
-        lean_run = LeanExecutor.run(project)
+        lean_run = await asyncio.to_thread(LeanExecutor.run, project)
 
         if lean_run.success:
             result_data = _lean_run_to_api_response(
