@@ -19,7 +19,9 @@ import pandas as pd
 from collections import namedtuple
 from datetime import datetime
 
-config_root = os.getcwd() + '\\'
+config_root = os.environ.get('KIS_CONFIG_DIR', os.getcwd() + '\\')
+if not config_root.endswith(('\\', '/')):
+    config_root += os.sep
 # config_root = 'd:\\KIS\\config\\'  # 토큰 파일이 저장될 폴더, 제3자가 찾지 어렵도록 경로 설정하시기 바랍니다.
 #token_tmp = config_root + 'KIS000000'  # 토큰 로컬저장시 파일 이름 지정, 파일이름을 토큰값이 유추가능한 파일명은 삼가바랍니다.
 #token_tmp = config_root + 'KIS' + datetime.today().strftime("%Y%m%d%H%M%S")  # 토큰 로컬저장시 파일명 년월일시분초
@@ -37,6 +39,9 @@ with open(config_root + 'kis_devlp.yaml', encoding='UTF-8') as f:
 _TRENV = tuple()
 _last_auth_time = datetime.now()
 _autoReAuth = False
+_last_svr = None  # 마지막으로 auth()를 호출한 서버 구분 (prod:실전, vps:모의)
+_last_product = None  # 마지막으로 auth()에 넘긴 상품코드
+_reauth_running = False  # 재인증 재진입 차단용
 _DEBUG = False
 _isPaper = False
 
@@ -82,7 +87,7 @@ def read_token():
 
 # 토큰 유효시간 체크해서 만료된 토큰이면 재발급처리
 def _getBaseHeader():
-    if _autoReAuth: reAuth()
+    if _autoReAuth and not _reauth_running: reAuth()
     return copy.deepcopy(_base_headers)
 
 
@@ -147,6 +152,9 @@ def _getResultObject(json_data):
 
 # Token 발급, 유효기간 1일, 6시간 이내 발급시 기존 token값 유지, 발급시 알림톡 무조건 발송
 def auth(svr='prod', product='01', url=None):
+    global _last_svr, _last_product
+    _last_svr = svr
+    _last_product = product
     p = {
         "grant_type": "client_credentials",
     }
@@ -196,10 +204,24 @@ def auth(svr='prod', product='01', url=None):
 
 # end of initialize, 토큰 재발급, 토큰 발급시 유효시간 1일
 # 프로그램 실행시 _last_auth_time에 저장하여 유효시간 체크, 유효시간 만료시 토큰 발급 처리
-def reAuth(svr='prod', product='01'):
+def reAuth(svr=None, product=None):
+    """토큰 유효기간(24시간)이 지나면 마지막 auth() 서버·상품으로 재발급한다.
+
+    생략된 인자는 기억한 값을 재사용하므로 모의 세션이 실전으로 바뀌지 않는다.
+    재진입(헤더 생성→재인증→헤더 생성)은 1회로 차단한다.
+    """
+    global _reauth_running
+    if _reauth_running:
+        return
+    svr = svr or _last_svr or "prod"
+    product = product or _last_product or "01"
     n2 = datetime.now()
-    if (n2 - _last_auth_time).seconds >= 86400:  # 유효시간 1일
-        auth(svr, product)
+    if (n2 - _last_auth_time).total_seconds() >= 86400:  # 유효시간 1일
+        _reauth_running = True
+        try:
+            auth(svr, product)
+        finally:
+            _reauth_running = False
 
 # 접근토큰발급 저장
 auth()
