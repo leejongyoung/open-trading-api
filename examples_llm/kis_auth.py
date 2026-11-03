@@ -52,6 +52,8 @@ with open(os.path.join(config_root, "kis_devlp.yaml"), encoding="UTF-8") as f:
 _TRENV = tuple()
 _last_auth_time = datetime.now()
 _autoReAuth = False
+_last_product = None  # 마지막으로 auth()에 넘긴 상품코드
+_reauth_running = False  # 재인증 재진입 차단용
 _DEBUG = False
 _isPaper = False
 _smartSleep = 0.1
@@ -129,7 +131,7 @@ def _read_token_file(path):
 
 # 토큰 유효시간 체크해서 만료된 토큰이면 재발급처리
 def _getBaseHeader():
-    if _autoReAuth:
+    if _autoReAuth and not _reauth_running:
         reAuth()
     return copy.deepcopy(_base_headers)
 
@@ -220,8 +222,9 @@ def _getResultObject(json_data):
 # Token 발급, 유효기간 1일, 6시간 이내 발급시 기존 token값 유지, 발급시 알림톡 무조건 발송
 # 모의투자인 경우  svr='vps', 투자계좌(01)이 아닌경우 product='XX' 변경하세요 (계좌번호 뒤 2자리)
 def auth(svr="prod", product=_cfg["my_prod"], url=None):
-    global _last_svr
+    global _last_svr, _last_product
     _last_svr = svr
+    _last_product = product
 
     p = {
         "grant_type": "client_credentials",
@@ -276,10 +279,24 @@ def auth(svr="prod", product=_cfg["my_prod"], url=None):
 
 # end of initialize, 토큰 재발급, 토큰 발급시 유효시간 1일
 # 프로그램 실행시 _last_auth_time에 저장하여 유효시간 체크, 유효시간 만료시 토큰 발급 처리
-def reAuth(svr="prod", product=_cfg["my_prod"]):
+def reAuth(svr=None, product=None):
+    """토큰 유효기간(24시간)이 지나면 마지막 auth() 서버·상품으로 재발급한다.
+
+    생략된 인자는 기억한 값을 재사용하므로 모의 세션이 실전으로 바뀌지 않는다.
+    재진입(헤더 생성→재인증→헤더 생성)은 1회로 차단한다.
+    """
+    global _reauth_running
+    if _reauth_running:
+        return
+    svr = svr or _last_svr or "prod"
+    product = product or _last_product or _cfg["my_prod"]
     n2 = datetime.now()
-    if (n2 - _last_auth_time).seconds >= 86400:  # 유효시간 1일
-        auth(svr, product)
+    if (n2 - _last_auth_time).total_seconds() >= 86400:  # 유효시간 1일
+        _reauth_running = True
+        try:
+            auth(svr, product)
+        finally:
+            _reauth_running = False
 
 
 def getEnv():
@@ -442,7 +459,8 @@ class APIRespError(APIResp):
 
 
 def _url_fetch(
-        api_url, ptr_id, tr_cont, params, appendHeaders=None, postFlag=False, hashFlag=True
+        api_url, ptr_id, tr_cont, params, appendHeaders=None, postFlag=False, hashFlag=True,
+        _retry=False
 ):
     url = f"{getTREnv().my_url}{api_url}"
 
@@ -479,7 +497,15 @@ def _url_fetch(
         ar = APIResp(res)
         if _DEBUG:
             ar.printAll()
+        try:
+            expired = not ar.isOK() and ar.getErrorCode() == "EGW00123"
+        except Exception:
+            expired = False
+        if expired and not _retry:
+            reAuth()
+            return _url_fetch(api_url, ptr_id, tr_cont, params, appendHeaders, postFlag, hashFlag, True)
         return ar
+
     else:
         print("Error Code : " + str(res.status_code) + " | " + res.text)
         return APIRespError(res.status_code, res.text)
@@ -535,10 +561,24 @@ def auth_ws(svr="prod", product=_cfg["my_prod"]):
         print(f"[{_last_auth_time}] => get AUTH Key completed!")
 
 
-def reAuth_ws(svr="prod", product=_cfg["my_prod"]):
+def reAuth_ws(svr=None, product=None):
+    """토큰 유효기간(24시간)이 지나면 마지막 auth() 서버·상품으로 재발급한다.
+
+    생략된 인자는 기억한 값을 재사용하므로 모의 세션이 실전으로 바뀌지 않는다.
+    재진입(헤더 생성→재인증→헤더 생성)은 1회로 차단한다.
+    """
+    global _reauth_running
+    if _reauth_running:
+        return
+    svr = svr or _last_svr or "prod"
+    product = product or _last_product or _cfg["my_prod"]
     n2 = datetime.now()
-    if (n2 - _last_auth_time).seconds >= 86400:
-        auth_ws(svr, product)
+    if (n2 - _last_auth_time).total_seconds() >= 86400:  # 유효시간 1일
+        _reauth_running = True
+        try:
+            auth_ws(svr, product)
+        finally:
+            _reauth_running = False
 
 
 def data_fetch(tr_id, tr_type, params, appendHeaders=None) -> dict:
