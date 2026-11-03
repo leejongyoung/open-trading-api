@@ -8,6 +8,11 @@ import os
 import json
 import requests
 
+# 모든 KIS HTTP 호출의 (connect, read) 타임아웃. 주문 POST 타임아웃은
+# "상태 불명"으로 취급한다(접수됐을 수 있으므로 자동 재시도 금지).
+REQ_TIMEOUT = (5.0, 30.0)
+
+
 import pandas as pd
 import numpy as np
 
@@ -229,7 +234,7 @@ def get_approval():
             "secretkey": ka.getTREnv().my_sec}
     PATH = "oauth2/Approval"
     URL = f"{url}/{PATH}"
-    res = requests.post(URL, headers=headers, data=json.dumps(body))
+    res = requests.post(URL, headers=headers, data=json.dumps(body), timeout=REQ_TIMEOUT)
     approval_key = res.json()["approval_key"]
     return approval_key
 
