@@ -11,14 +11,22 @@ sys.path.insert(0, project_root)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from backend.routers import strategy, auth, market, orders, account, files, symbols
+from backend.security import get_trusted_hosts
 
 # FastAPI 앱 생성
 app = FastAPI(
     title="KIS Strategy Builder",
     description="한국투자증권 전략 빌더",
     version="1.0.0"
+)
+
+# Host 헤더 검증 (DNS rebinding 완화 — CORS가 막지 못하는 경로 차단)
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=get_trusted_hosts(),
 )
 
 # CORS 설정
