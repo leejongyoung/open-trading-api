@@ -5,6 +5,11 @@
 # (0) 필요 모듈 임포트
 import pandas as pd
 import requests
+
+# 모든 KIS HTTP 호출의 (connect, read) 타임아웃. 주문 POST 타임아웃은
+# "상태 불명"으로 취급한다(접수됐을 수 있으므로 자동 재시도 금지).
+REQ_TIMEOUT = (5.0, 30.0)
+
 import json
 import yaml
 import time
@@ -31,7 +36,7 @@ def get_access_token():
             "appsecret": APP_SECRET}
     PATH = "oauth2/tokenP"
     URL = f"{URL_BASE}/{PATH}"
-    res = requests.post(URL, headers=headers, data=json.dumps(body))
+    res = requests.post(URL, headers=headers, data=json.dumps(body), timeout=REQ_TIMEOUT)
     time.sleep(0.1) # 유량제한 예방 (REST: 1초당 20건 제한)
     try:
         ACCESS_TOKEN = res.json()["access_token"]
@@ -59,7 +64,7 @@ def get_interest_groups():
         "custtype": "P"
     }
     time.sleep(0.05) # 유량제한 예방 (REST: 1초당 20건 제한)
-    res = requests.get(URL, headers=headers, params=params)
+    res = requests.get(URL, headers=headers, params=params, timeout=REQ_TIMEOUT)
     return res.json()
 
 ## 3. 관심종목 그룹별 종목 조회
@@ -85,7 +90,7 @@ def get_group_stocks(interest_group):
         "custtype": "P"
     }
     time.sleep(0.05) # 유량제한 예방 (REST: 1초당 20건 제한)
-    res = requests.get(URL, headers=headers, params=params)
+    res = requests.get(URL, headers=headers, params=params, timeout=REQ_TIMEOUT)
     return res.json()
 
 ## 4. 관심종목(멀티종목) 시세조회 (30종목까지 조회 가능)
@@ -101,7 +106,7 @@ def get_multi_stock_prices(jongs):
         "custtype": "P"
     }
     time.sleep(0.05) # 유량제한 예방 (REST: 1초당 20건 제한)
-    res = requests.get(URL, headers=headers, params=jongs)
+    res = requests.get(URL, headers=headers, params=jongs, timeout=REQ_TIMEOUT)
     print(res.text)
     print(res.json())
     return res.json()

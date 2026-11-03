@@ -1,4 +1,9 @@
 import requests
+
+# 모든 KIS HTTP 호출의 (connect, read) 타임아웃. 주문 POST 타임아웃은
+# "상태 불명"으로 취급한다(접수됐을 수 있으므로 자동 재시도 금지).
+REQ_TIMEOUT = (5.0, 30.0)
+
 import json
  
 APP_KEY = ""
@@ -16,7 +21,7 @@ def auth():
         }
     PATH = "oauth2/tokenP"
     URL = f"{URL_BASE}/{PATH}"
-    res = requests.post(URL, headers=headers, data=json.dumps(body))
+    res = requests.post(URL, headers=headers, data=json.dumps(body), timeout=REQ_TIMEOUT)
     
     global ACCESS_TOKEN
     ACCESS_TOKEN = res.json()["access_token"]
@@ -39,7 +44,7 @@ def get_current_price(stock_no):
     }
 
     # 호출
-    res = requests.get(URL, headers=headers, params=params)
+    res = requests.get(URL, headers=headers, params=params, timeout=REQ_TIMEOUT)
 
     if res.status_code == 200 and res.json()["rt_cd"] == "0" :
         return(res.json())

@@ -55,6 +55,7 @@ with open(os.path.join(config_root, "kis_devlp.yaml"), encoding="UTF-8") as f:
     _cfg = yaml.safe_load(f)
 
 _TRENV = tuple()
+REQ_TIMEOUT = (5.0, 30.0)  # 모든 KIS HTTP 호출의 (connect, read) 타임아웃
 _last_auth_time = datetime.now()
 _autoReAuth = False
 _last_svr = None  # 마지막으로 auth()를 호출한 서버 구분 (prod:실전, vps:모의)
@@ -310,7 +311,10 @@ def auth(svr="prod", product=_cfg["my_prod"], url=None):
     if saved_token is None:  # 기존 발급 토큰 확인이 안되면 발급처리
         url = f"{_cfg[svr]}/oauth2/tokenP"
         res = requests.post(
-            url, data=json.dumps(p), headers=_getBaseHeader()
+            url,
+            data=json.dumps(p),
+            headers=_getBaseHeader(),
+            timeout=REQ_TIMEOUT,
         )  # 토큰 발급
         rescode = res.status_code
         if rescode == 200:  # 토큰 정상 발급
@@ -384,7 +388,7 @@ def getTREnv():
 def set_order_hash_key(h, p):
     url = f"{getTREnv().my_url}/uapi/hashkey"  # hashkey 발급 API URL
 
-    res = requests.post(url, data=json.dumps(p), headers=h)
+    res = requests.post(url, data=json.dumps(p), headers=h, timeout=REQ_TIMEOUT)
     rescode = res.status_code
     if rescode == 200:
         h["hashkey"] = _getResultObject(res.json()).HASH
@@ -565,9 +569,9 @@ def _url_fetch(
 
     if postFlag:
         # if (hashFlag): set_order_hash_key(headers, params)
-        res = requests.post(url, headers=headers, data=json.dumps(params))
+        res = requests.post(url, headers=headers, data=json.dumps(params), timeout=REQ_TIMEOUT)
     else:
-        res = requests.get(url, headers=headers, params=params)
+        res = requests.get(url, headers=headers, params=params, timeout=REQ_TIMEOUT)
 
     if res.status_code == 200:
         ar = APIResp(res)
@@ -618,7 +622,7 @@ def auth_ws(svr="prod", product=_cfg["my_prod"]):
     p["secretkey"] = _cfg[ak2]
 
     url = f"{_cfg[svr]}/oauth2/Approval"
-    res = requests.post(url, data=json.dumps(p), headers=_getBaseHeader())  # 토큰 발급
+    res = requests.post(url, data=json.dumps(p), headers=_getBaseHeader(), timeout=REQ_TIMEOUT)  # 토큰 발급
     rescode = res.status_code
     if rescode == 200:  # 토큰 정상 발급
         approval_key = _getResultObject(res.json()).approval_key

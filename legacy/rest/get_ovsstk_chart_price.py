@@ -9,6 +9,11 @@
 from datetime import datetime, timedelta
 import pandas as pd
 import requests
+
+# 모든 KIS HTTP 호출의 (connect, read) 타임아웃. 주문 POST 타임아웃은
+# "상태 불명"으로 취급한다(접수됐을 수 있으므로 자동 재시도 금지).
+REQ_TIMEOUT = (5.0, 30.0)
+
 import json
 import yaml
 import time
@@ -40,7 +45,7 @@ def get_access_token():
     URL = f"{URL_BASE}/{PATH}"
 
     time.sleep(0.1)  # 유량제한 예방 (REST: 1초당 20건 제한)
-    res = requests.post(URL, headers=headers, data=json.dumps(body))
+    res = requests.post(URL, headers=headers, data=json.dumps(body), timeout=REQ_TIMEOUT)
 
     if res.status_code == 200:
         try:
@@ -85,7 +90,7 @@ def call_api(exc_code, sym_code, nmin, keyb="", next_value="", access_token=""):
     }
     
     time.sleep(0.1)  # 유량제한 예방 (REST: 1초당 20건 제한)
-    response = requests.get(URL, headers=headers, params=params)
+    response = requests.get(URL, headers=headers, params=params, timeout=REQ_TIMEOUT)
     
     if response.status_code == 200:
         data = response.json()
