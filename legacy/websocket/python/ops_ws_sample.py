@@ -148,7 +148,7 @@ async def connect():
         url = 'ws://ops.koreainvestment.com:21000' # 실전투자계좌
 
         g_approval_key = get_approval(g_appkey, g_appsecret)
-        print("approval_key [%s]" % (g_approval_key))
+        print("approval_key [****%s]" % (str(g_approval_key)[-4:] if len(str(g_approval_key)) >= 4 else "****"))
 
         async with websockets.connect(url, ping_interval=None) as websocket:
 

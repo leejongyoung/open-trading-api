@@ -505,7 +505,7 @@ def main():
         # 1. Approval key 발급
         print("=== Approval Key 발급 중 ===")
         approval_key = get_approval(g_appkey, g_appsecret)
-        print(f"Approval Key: {approval_key}\n")
+        print(f"Approval Key: ****{str(approval_key)[-4:]}\n")
         
         # 2. 각 종목별 데이터 큐 생성 (Manager 사용)
         manager = Manager()
