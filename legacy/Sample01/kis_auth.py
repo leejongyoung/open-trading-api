@@ -33,7 +33,9 @@ clearConsole = lambda: os.system('cls' if os.name in ('nt', 'dos') else 'clear')
 
 key_bytes = 32
 
-config_root = 'd:\\KIS\\config\\'  # 토큰 파일이 저장될 폴더, 제3자가 찾지 어렵도록 경로 설정하시기 바랍니다.
+config_root = os.environ.get('KIS_CONFIG_DIR', 'd:\\KIS\\config\\')  # 토큰 파일이 저장될 폴더, 제3자가 찾지 어렵도록 경로 설정하시기 바랍니다.
+if not config_root.endswith(('\\', '/')):
+    config_root += os.sep
 #token_tmp = config_root + 'KIS000000'  # 토큰 로컬저장시 파일 이름 지정, 파일이름을 토큰값이 유추가능한 파일명은 삼가바랍니다.
 #token_tmp = config_root + 'KIS' + datetime.today().strftime("%Y%m%d%H%M%S")  # 토큰 로컬저장시 파일명 년월일시분초
 token_tmp = config_root + 'KIS' + datetime.today().strftime("%Y%m%d")  # 토큰 로컬저장시 파일명 년월일
@@ -50,6 +52,9 @@ with open(config_root + 'kis_devlp.yaml', encoding='UTF-8') as f:
 _TRENV = tuple()
 _last_auth_time = datetime.now()
 _autoReAuth = False
+_last_svr = None  # 마지막으로 auth()를 호출한 서버 구분 (prod:실전, vps:모의)
+_last_product = None  # 마지막으로 auth()에 넘긴 상품코드
+_reauth_running = False  # 재인증 재진입 차단용
 _DEBUG = False
 _isPaper = False
 
@@ -96,7 +101,7 @@ def read_token():
 
 # 토큰 유효시간 체크해서 만료된 토큰이면 재발급처리
 def _getBaseHeader():
-    if _autoReAuth: reAuth()
+    if _autoReAuth and not _reauth_running: reAuth()
     return copy.deepcopy(_base_headers)
 
 
@@ -168,6 +173,9 @@ def _getResultObject(json_data):
 # Token 발급, 유효기간 1일, 6시간 이내 발급시 기존 token값 유지, 발급시 알림톡 무조건 발송
 # 모의투자인 경우  svr='vps', 투자계좌(01)이 아닌경우 product='XX' 변경하세요 (계좌번호 뒤 2자리)
 def auth(svr='prod', product=_cfg['my_prod'], url=None):
+    global _last_svr, _last_product
+    _last_svr = svr
+    _last_product = product
     p = {
         "grant_type": "client_credentials",
     }
@@ -217,10 +225,24 @@ def auth(svr='prod', product=_cfg['my_prod'], url=None):
 
 # end of initialize, 토큰 재발급, 토큰 발급시 유효시간 1일
 # 프로그램 실행시 _last_auth_time에 저장하여 유효시간 체크, 유효시간 만료시 토큰 발급 처리
-def reAuth(svr='prod', product=_cfg['my_prod']):
+def reAuth(svr=None, product=None):
+    """토큰 유효기간(24시간)이 지나면 마지막 auth() 서버·상품으로 재발급한다.
+
+    생략된 인자는 기억한 값을 재사용하므로 모의 세션이 실전으로 바뀌지 않는다.
+    재진입(헤더 생성→재인증→헤더 생성)은 1회로 차단한다.
+    """
+    global _reauth_running
+    if _reauth_running:
+        return
+    svr = svr or _last_svr or "prod"
+    product = product or _last_product or _cfg["my_prod"]
     n2 = datetime.now()
-    if (n2 - _last_auth_time).seconds >= 86400:  # 유효시간 1일
-        auth(svr, product)
+    if (n2 - _last_auth_time).total_seconds() >= 86400:  # 유효시간 1일
+        _reauth_running = True
+        try:
+            auth(svr, product)
+        finally:
+            _reauth_running = False
 
 
 def getEnv():
@@ -313,7 +335,8 @@ class APIResp:
 
 ########### API call wrapping : API 호출 공통
 
-def _url_fetch(api_url, ptr_id, tr_cont, params, appendHeaders=None, postFlag=False, hashFlag=True):
+def _url_fetch(api_url, ptr_id, tr_cont, params, appendHeaders=None, postFlag=False, hashFlag=True,
+               _retry=False):
     url = f"{getTREnv().my_url}{api_url}"
 
     headers = _getBaseHeader()  # 기본 header 값 정리
@@ -349,6 +372,14 @@ def _url_fetch(api_url, ptr_id, tr_cont, params, appendHeaders=None, postFlag=Fa
     if res.status_code == 200:
         ar = APIResp(res)
         if (_DEBUG): ar.printAll()
+        # 토큰 만료(EGW00123)면 1회만 재인증 후 재시도한다
+        try:
+            expired = not ar.isOK() and ar.getErrorCode() == "EGW00123"
+        except Exception:
+            expired = False
+        if expired and not _retry:
+            reAuth()
+            return _url_fetch(api_url, ptr_id, tr_cont, params, appendHeaders, postFlag, hashFlag, True)
         return ar
     else:
         print("Error Code : " + str(res.status_code) + " | " + res.text)
