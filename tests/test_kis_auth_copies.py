@@ -185,3 +185,16 @@ def test_change_trenv_updates_smart_sleep(any_copy):
     mod.changeTREnv("DUMMYTOKEN", "prod", "01")
     assert mod._isPaper is False
     assert mod._smartSleep == 0.05
+
+
+# ---- 이슈 #13: 방금 발급된 토큰이 _TRENV.my_token에 저장된다 ----
+
+def test_change_trenv_stores_new_token(any_copy):
+    name, mod = any_copy
+    if name.startswith("legacy_"):
+        pytest.skip("legacy 복제본은 토큰 저장 규약이 달라 제외")
+    mod.changeTREnv("NEWTOKEN123", "vps", "01")
+    assert mod.getTREnv().my_token == "NEWTOKEN123"
+    # falsy 토큰이면 기존 값을 유지한다(auth_ws의 changeTREnv(None, ...) 경로)
+    mod.changeTREnv(None, "vps", "01")
+    assert mod.getTREnv().my_token == "NEWTOKEN123"
