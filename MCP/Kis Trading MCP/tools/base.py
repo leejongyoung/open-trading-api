@@ -26,6 +26,15 @@ _ORDER_API_PREFIXES = ("order", "daytime_order")
 _ORDER_API_NAMES = frozenset({"buy", "sell"})
 _ORDER_READ_EXCEPTIONS = frozenset({"order_resv_list"})
 
+# 다운로드 고정 (이슈 #3): main 추적 금지. API 예제는 검증된 커밋 SHA로 고정하고
+# SHA-256 매니페스트(api_hashes.json)로 검증 후 디스크 캐시에 보관한다.
+# kis_auth는 포크 수정본을 패키지에 번들(bundled_kis_auth.py)하므로 내려받지 않는다.
+# 새 검증 커밋으로 올리려면 MCP_API_CODE_REF에 SHA를 주고 api_hashes.json을 재생성한다.
+PINNED_API_REF = "3a9be59a3ed8745720dc3aa9d584bdf3b7830362"
+API_HASHES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "api_hashes.json")
+BUNDLED_KIS_AUTH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bundled_kis_auth.py")
+API_CACHE_DIRNAME = ".api_cache"
+
 # 사용자 입력을 포함하지 않는 고정 실행 템플릿 (function_name만 서버 검증 후 치환)
 API_RUNNER_TEMPLATE = """
 # MCP API runner (fixed template)
@@ -149,37 +158,83 @@ class ApiExecutor:
         os.makedirs(temp_dir, exist_ok=True)
         return temp_dir
 
-    @classmethod
-    def _download_file(cls, url: str, file_path: str) -> bool:
-        """파일 다운로드"""
-        try:
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
 
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(response.text)
+    @staticmethod
+    def _api_code_ref() -> str:
+        """API 예제를 가져올 커밋 ref. 기본은 검증된 고정 SHA, MCP_API_CODE_REF로 재지정."""
+        return (os.environ.get("MCP_API_CODE_REF") or "").strip() or PINNED_API_REF
+
+    @classmethod
+    def _pinned_raw_url(cls, github_url: str, api_type: str) -> str:
+        """tree/main URL을 고정 ref의 raw URL로 변환"""
+        raw_url = github_url.replace('/tree/', '/').replace('github.com', 'raw.githubusercontent.com')
+        raw_url = raw_url.replace('/main/', f"/{cls._api_code_ref()}/", 1)
+        return f"{raw_url}/{api_type}.py"
+
+    _api_hashes = None
+
+    @classmethod
+    def _load_api_hashes(cls) -> Dict[str, str]:
+        """SHA-256 매니페스트 로드 (없으면 빈 dict = 전부 차단)"""
+        if cls._api_hashes is None:
+            try:
+                with open(API_HASHES_FILE, 'r', encoding='utf-8') as f:
+                    cls._api_hashes = json.load(f)
+            except (OSError, ValueError):
+                cls._api_hashes = {}
+        return cls._api_hashes
+
+    @classmethod
+    def _verify_api_body(cls, url: str, body: bytes) -> None:
+        """매니페스트 대조. 항목이 없거나 해시가 다르면 거부한다."""
+        import hashlib
+        expected = cls._load_api_hashes().get(url)
+        if not expected:
+            raise ValueError(f"API 코드 해시 미등록(차단): {url}")
+        actual = hashlib.sha256(body).hexdigest()
+        if actual != expected:
+            raise ValueError(f"API 코드 해시 불일치(차단): {url}")
+
+    def _cache_path(self, url: str) -> str:
+        """고정 ref URL 전용 디스크 캐시 경로"""
+        import hashlib
+        cache_dir = os.path.join(self.temp_base_dir, API_CACHE_DIRNAME)
+        os.makedirs(cache_dir, exist_ok=True)
+        return os.path.join(cache_dir, hashlib.sha256(url.encode('utf-8')).hexdigest() + ".py")
+
+    def _ensure_kis_auth(self, temp_dir: str) -> bool:
+        """번들된 kis_auth.py를 실행 디렉토리에 복사 (다운로드 없음)"""
+        try:
+            shutil.copyfile(BUNDLED_KIS_AUTH_FILE, os.path.join(temp_dir, "kis_auth.py"))
             return True
         except Exception as e:
-            print(f"파일 다운로드 실패: {url}, 오류: {str(e)}")
+            print(f"kis_auth 번들 복사 실패: {str(e)}")
             return False
 
-    def _download_kis_auth(self, temp_dir: str) -> bool:
-        """kis_auth.py 다운로드"""
-        kis_auth_url = "https://raw.githubusercontent.com/koreainvestment/open-trading-api/main/examples_llm/kis_auth.py"
-        kis_auth_path = os.path.join(temp_dir, "kis_auth.py")
-        return self._download_file(kis_auth_url, kis_auth_path)
-
     def _download_api_code(self, github_url: str, temp_dir: str, api_type: str) -> str:
-        """API 코드 다운로드"""
-        # GitHub URL을 raw URL로 변환하고 api_type/api_type.py를 붙여서 실제 파일 경로 생성
-        raw_url = github_url.replace('/tree/', '/').replace('github.com', 'raw.githubusercontent.com')
-        full_url = f"{raw_url}/{api_type}.py"
-        api_code_path = os.path.join(temp_dir, "api_code.py")
-
-        if self._download_file(full_url, api_code_path):
+        """API 코드 준비 (고정 ref + 해시 검증 + 디스크 캐시, 호출마다 내려받지 않음)"""
+        full_url = self._pinned_raw_url(github_url, api_type)
+        cached = self._cache_path(full_url)
+        if os.path.exists(cached):
+            with open(cached, 'rb') as f:
+                self._verify_api_body(full_url, f.read())
+            api_code_path = os.path.join(temp_dir, "api_code.py")
+            shutil.copyfile(cached, api_code_path)
             return api_code_path
-        else:
-            raise Exception(f"API 코드 다운로드 실패: {full_url}")
+        try:
+            response = requests.get(full_url, timeout=30)
+            response.raise_for_status()
+            body = response.content
+            self._verify_api_body(full_url, body)
+        except ValueError:
+            raise
+        except Exception as e:
+            raise Exception(f"API 코드 다운로드 실패: {full_url} ({str(e)})")
+        with open(cached, 'wb') as f:
+            f.write(body)
+        api_code_path = os.path.join(temp_dir, "api_code.py")
+        shutil.copyfile(cached, api_code_path)
+        return api_code_path
 
     @classmethod
     def _extract_trenv_params_from_example(cls, api_code_content: str) -> Dict[str, str]:
@@ -419,9 +474,9 @@ class ApiExecutor:
                 request_id = "unknown"
             temp_dir = self._create_temp_directory(request_id)
 
-            # 2. kis_auth.py 다운로드
-            if not self._download_kis_auth(temp_dir):
-                raise Exception("kis_auth.py 다운로드 실패")
+            # 2. kis_auth.py 준비 (패키지 번들 복사, 다운로드 없음)
+            if not self._ensure_kis_auth(temp_dir):
+                raise Exception("kis_auth.py 번들 준비 실패")
 
             # 3. API 코드 다운로드
             api_code_path = self._download_api_code(github_url, temp_dir, api_type)
