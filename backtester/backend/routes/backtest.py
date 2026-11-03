@@ -5,6 +5,7 @@ Lean Docker 기반 백테스트 실행.
 
 import asyncio
 import logging
+import math
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -48,6 +49,19 @@ def _require_valid_symbols(symbols) -> None:
             status_code=400,
             detail=f"Invalid symbols: {bad} (allowed: 0-9A-Za-z, 1-12 chars)",
         )
+
+def _resolve_cost(value, default: float, name: str) -> float:
+    """거래 비용 파라미터 검증·기본값 해결."""
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a number")
+    v = float(value)
+    if not math.isfinite(v):
+        raise ValueError(f"{name} must be finite")
+    if not 0 <= v <= 1:
+        raise ValueError(f"{name} must be between 0 and 1")
+    return v
 
 
 def _load_benchmark_curve(
@@ -634,9 +648,9 @@ async def run_backtest(request: BacktestRequest) -> BacktestResponse:
     try:
         # 거래 비용 설정
         config = CodeGenConfig(
-            commission_rate=request.commission_rate or 0.00015,
-            tax_rate=request.tax_rate or 0.002,
-            slippage=request.slippage or 0.0,
+            commission_rate=_resolve_cost(request.commission_rate, 0.00015, "commission_rate"),
+            tax_rate=_resolve_cost(request.tax_rate, 0.002, "tax_rate"),
+            slippage=_resolve_cost(request.slippage, 0.0, "slippage"),
             initial_capital=request.initial_capital,
         )
         generator = LeanCodeGenerator(definition, config=config)
@@ -646,6 +660,8 @@ async def run_backtest(request: BacktestRequest) -> BacktestResponse:
             end_date=end_date,
             initial_capital=request.initial_capital,
         )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except BOUNDARY_ERRORS as e:
         raise HTTPException(status_code=400, detail=f"Code generation failed: {e}")
 
@@ -785,9 +801,9 @@ async def run_custom_backtest(request: CustomBacktestRequest) -> BacktestRespons
         
         # 거래 비용 설정
         config = CodeGenConfig(
-            commission_rate=request.commission_rate or 0.00015,
-            tax_rate=request.tax_rate or 0.002,
-            slippage=request.slippage or 0.0,
+            commission_rate=_resolve_cost(request.commission_rate, 0.00015, "commission_rate"),
+            tax_rate=_resolve_cost(request.tax_rate, 0.002, "tax_rate"),
+            slippage=_resolve_cost(request.slippage, 0.0, "slippage"),
             initial_capital=request.initial_capital,
         )
         generator = LeanCodeGenerator(schema, config=config)
@@ -797,6 +813,10 @@ async def run_custom_backtest(request: CustomBacktestRequest) -> BacktestRespons
             end_date=request.end_date,
             initial_capital=request.initial_capital,
         )
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except BOUNDARY_ERRORS as e:
         raise HTTPException(status_code=400, detail=f"Code generation failed: {e}")
     
