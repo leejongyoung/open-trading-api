@@ -237,7 +237,7 @@ async def connect():
                         recvstr = data.split('|')  # 수신데이터가 실데이터 이전은 '|'로 나뉘어져있어 split
                         trid0 = recvstr[1]
                         if trid0 == "K0STCNI0" or trid0 == "K0STCNI9" or trid0 == "H0STCNI0" or trid0 == "H0STCNI9":  # 주실체결 통보 처리
-                            stocksigningnotice(recvstr[3], aes_key, aes_iv)
+                            stocksigningnotice_domestic(recvstr[3], aes_key, aes_iv)
 
                     # clearConsole()
                     # break;
