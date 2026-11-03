@@ -300,3 +300,91 @@ def test_from_env_requires_explicit_live(tmp_path, monkeypatch):
     assert authed == ["prod"]
     assert pa.KISAuth.from_env(mode="paper").is_paper is True
     assert authed == ["prod", "vps"]
+
+
+# ---- 이슈 #17: 웹소켓 구독 상한·해제·배치 파싱 ----
+
+def _fake_request(tr_type, data):
+    return ({"header": {"tr_type": tr_type},
+             "body": {"input": {"tr_id": "H0STCNT0"}}}, ["c1", "c2"])
+
+
+def test_cap_counts_items_not_trs(modern_copy, monkeypatch):
+    _, mod = modern_copy
+    monkeypatch.setattr(mod, "smart_sleep", lambda: None)
+    for i in range(21):
+        mod.add_open_map(f"f{i}", _fake_request, ["a", "b"])
+    assert mod.open_subscription_count() == 42
+
+
+def test_runner_rejects_over_cap(modern_copy):
+    import asyncio
+    _, mod = modern_copy
+    for i in range(41):
+        mod.add_open_map(f"f{i}", _fake_request, ["x"])
+    with pytest.raises(ValueError):
+        asyncio.run(mod.KISWebSocket("")._KISWebSocket__runner())
+
+
+def test_unsubscribe_sends_unsub(modern_copy, monkeypatch):
+    import asyncio
+    import json
+    _, mod = modern_copy
+    monkeypatch.setattr(mod, "smart_sleep", lambda: None)
+    sent = []
+
+    class FakeWS:
+        async def send(self, msg):
+            sent.append(json.loads(msg))
+
+    asyncio.run(mod.KISWebSocket("").unsubscribe(FakeWS(), _fake_request, "005930"))
+    assert sent and sent[0]["header"]["tr_type"] == "2"
+
+
+def _run_subscriber(mod, raw):
+    import asyncio
+    seen = {}
+
+    class FakeWS:
+        def __aiter__(self):
+            async def gen():
+                yield raw
+            return gen()
+
+    ksw = mod.KISWebSocket("")
+    ksw.on_result = lambda ws, tr_id, df, dm: seen.update(df=df)
+    mod.add_data_map(tr_id="H0STCNT0", columns=["c1", "c2"])
+    asyncio.run(ksw._KISWebSocket__subscriber(FakeWS()))
+    return seen["df"]
+
+
+def test_batch_records_reshape(modern_copy):
+    _, mod = modern_copy
+    df = _run_subscriber(mod, "0|H0STCNT0|2|a^b^c^d")
+    assert df.shape == (2, 2)
+    assert df.iloc[1].tolist() == ["c", "d"]
+
+
+def test_single_record_unchanged(modern_copy):
+    _, mod = modern_copy
+    df = _run_subscriber(mod, "0|H0STCNT0|1|a^b")
+    assert df.shape == (1, 2)
+
+
+LEGACY_WS_FIXES = [
+    "legacy/websocket/python/ws_domestic_stock.py",
+    "legacy/websocket/python/multi_processing_sample_ws.py",
+]
+
+
+@pytest.mark.parametrize("rel", LEGACY_WS_FIXES)
+def test_legacy_signing_notice_defined(rel):
+    import ast
+    src = (REPO_ROOT / rel).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    called = {n.func.id for n in ast.walk(tree)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    defined = {n.name for n in ast.walk(tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assert "stocksigningnotice" not in called - defined
+    assert "stocksigningnotice_domestic" in called

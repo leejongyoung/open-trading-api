@@ -192,7 +192,7 @@ def data_processor_worker(worker_id, data_queue, stock_code):
                     aes_iv = message.get('aes_iv')
                     print(f"[Processor-{worker_id}] [PID:{process_id}] [종목:{stock_code}] "
                           f"체결통보 처리 중... (처리건수: {processed_count})")
-                    stocksigningnotice(data, aes_key, aes_iv)
+                    stocksigningnotice_domestic(data, aes_key, aes_iv)
                 
             except Exception as e:
                 error_count += 1
