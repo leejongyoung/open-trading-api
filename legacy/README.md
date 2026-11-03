@@ -445,7 +445,7 @@ KIS Developers 서비스 가입 후 HTS ID를 변경하여 '처리계좌의 ID�
 |Sample01|kis_api03.py|python|[해외주식] 주문/계좌조회/시세 호출|
 |Sample01|kis_api04.py|python|[해외선물옵션] 주문/계좌조회/시세 호출|
 |Sample01|kis_auth.py|python|토큰 발급 관리 및 공통 샘플|
-|Sample01|kis_devlp.yaml|yaml|사용자 환경 샘플|
+|Sample01|kis_devlp.sample.yaml|yaml|사용자 환경 샘플|
 |Sample01|kis_domfuopt.py|python|[국내선물옵션] 주문/계좌조회/시세 함수|
 |Sample01|kis_domstk.py|python|[국내주식] 주문/계좌조회/시세 함수|
 |Sample01|kis_domstk_ws.py|python|[국내주식] 실시간(웹소켓) 체결/호가/계좌체결발생+REST 호출 함수|

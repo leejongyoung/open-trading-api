@@ -176,3 +176,6 @@ backtester/examples/output/*.py
 settings.local.json
 
 .serena/
+# ===== KIS 설정 (앱키/시크릿/계좌번호 입력 파일, 템플릿은 *.sample.yaml) =====
+kis_devlp.yaml
+**/kis_devlp.yaml

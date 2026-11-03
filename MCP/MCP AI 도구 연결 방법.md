@@ -243,7 +243,7 @@ cd "$HOME\자동매매"
 
 **GitHub 링크**: https://github.com/koreainvestment/open-trading-api
 
-1. **kis_devlp.yaml** → `~/KIS/config` 폴더에 저장 **(보안 정보로 별도 관리)**
+1. **kis_devlp.yaml** → `~/KIS/config` 폴더에 저장 **(보안 정보로 별도 관리, 저장소에는 `kis_devlp.sample.yaml` 템플릿만 있으며 `kis_devlp.yaml`로 이름을 바꿔 사용)**
     
     https://github.com/koreainvestment/open-trading-api/blob/main/kis_devlp.yaml
     
