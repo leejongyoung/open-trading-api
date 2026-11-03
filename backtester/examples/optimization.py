@@ -40,7 +40,7 @@ def create_client():
     from kis_backtest.providers.kis import KISAuth, KISDataProvider
 
     try:
-        auth = KISAuth.from_env()
+        auth = KISAuth.from_env(mode="paper")
         data_provider = KISDataProvider(auth)
 
         mode_str = "모의투자" if auth.is_paper else "실전투자"

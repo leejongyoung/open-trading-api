@@ -221,3 +221,82 @@ def test_auth_ws_failure_raises(name, tmp_path, monkeypatch):
     monkeypatch.setattr(mod.requests, "post", lambda *a, **k: FakeResp(500, {"rt_cd": "1", "msg_cd": "EGW00123", "msg1": "fail"}))
     with pytest.raises(RuntimeError):
         mod.auth_ws(svr="vps", product="01")
+
+
+# ---- 이슈 #15: 실전/모의 토큰 파일을 분리하고 앱키로 귀속한다 ----
+
+def _seed_token(mod, token, svr):
+    mod.save_token(token, "2099-01-01 00:00:00", svr)
+
+
+def test_token_files_are_per_server(any_copy):
+    _, mod = any_copy
+    _seed_token(mod, "PRODTOK", "prod")
+    assert mod.read_token("vps") is None
+    assert mod.read_token("prod") == "PRODTOK"
+    _seed_token(mod, "VPSTOK", "vps")
+    assert mod.read_token("prod") == "PRODTOK"
+    assert mod.read_token("vps") == "VPSTOK"
+
+
+def test_appkey_change_discards_token(any_copy):
+    _, mod = any_copy
+    _seed_token(mod, "PRODTOK", "prod")
+    assert mod.read_token("prod") == "PRODTOK"
+    mod._cfg["my_app"] = "ROTATED_APP"
+    try:
+        assert mod.read_token("prod") is None
+    finally:
+        mod._cfg["my_app"] = "DUMMY_APP"
+
+
+def _load_provider(tmp_path, monkeypatch):
+    import base64
+    import importlib.util
+    home = tmp_path / "prov_home"
+    cfg_dir = home / "KIS" / "config"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "kis_devlp.yaml").write_text(yaml.safe_dump(FIXTURE_CFG), encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("KIS_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setattr("requests.post", lambda *a, **k: LOAD_BLOCKED)
+    monkeypatch.setattr("requests.get", lambda *a, **k: LOAD_BLOCKED)
+    spec = importlib.util.spec_from_file_location(
+        "kis_provider_auth",
+        REPO_ROOT / "backtester" / "kis_backtest" / "providers" / "kis" / "auth.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["kis_provider_auth"] = mod
+    spec.loader.exec_module(mod)
+    return mod, cfg_dir
+
+
+def _live_jwt(appkey):
+    import base64
+    import json
+    b = lambda o: base64.urlsafe_b64encode(json.dumps(o).encode()).decode()
+    return f"{b({'alg': 'none'})}.{b({'jti': appkey})}.sig"
+
+
+def test_from_env_requires_explicit_live(tmp_path, monkeypatch):
+    import hashlib
+    from datetime import datetime
+    pa, cfg_dir = _load_provider(tmp_path, monkeypatch)
+    fp = hashlib.sha256(b"DUMMY_APP").hexdigest()[:16]
+    (cfg_dir / f"KIS{datetime.today().strftime('%Y%m%d')}_prod").write_text(
+        yaml.safe_dump({"token": _live_jwt("DUMMY_APP"),
+                        "valid-date": datetime(2099, 1, 1),
+                        "appkey-sha": fp}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        pa.KISAuth.from_env()
+    # 이후는 모드 결정만 본다. 실제 발급은 가짜 처리한다.
+    authed = []
+    monkeypatch.setattr(pa.ka, "auth", lambda svr, product: authed.append(svr))
+    monkeypatch.setattr(pa.ka, "getTREnv",
+                        lambda: SimpleNamespace(my_url="https://x"))
+    assert pa.KISAuth.from_env(mode="live").is_paper is False
+    assert authed == ["prod"]
+    assert pa.KISAuth.from_env(mode="paper").is_paper is True
+    assert authed == ["prod", "vps"]

@@ -375,7 +375,7 @@ async def prepare_market_data(
     
     # KIS 인증
     try:
-        auth = KISAuth.from_env()
+        auth = KISAuth.from_env(mode="paper")
         provider = KISDataProvider(auth)
     except KIS_AUTH_ERRORS as e:
         logger.warning(f"[Data] KIS 인증 실패: {type(e).__name__} - 기존 캐시만 사용")
@@ -471,7 +471,7 @@ async def prepare_benchmark_data(
 
     # KIS API 다운로드
     try:
-        auth = KISAuth.from_env()
+        auth = KISAuth.from_env(mode="paper")
         provider = KISDataProvider(auth)
 
         logger.info(f"[Benchmark] 다운로드 중: {index_name} ({index_code})")
