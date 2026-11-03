@@ -130,6 +130,19 @@ def _read_token_file(path):
 
 
 # 토큰 유효시간 체크해서 만료된 토큰이면 재발급처리
+def clear_saved_tokens():
+    """저장된 토큰 파일(당일 + prod/vps 분리본)을 모두 삭제한다. 삭제된 개수를 반환."""
+    removed = 0
+    for path in (token_tmp, f"{token_tmp}_prod", f"{token_tmp}_vps"):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def _getBaseHeader():
     if _autoReAuth and not _reauth_running:
         reAuth()
@@ -258,8 +271,9 @@ def auth(svr="prod", product=_cfg["my_prod"], url=None):
             ).access_token_token_expired  # 토큰값 만료일시 가져오기
             save_token(my_token, my_expired, svr)  # 새로 발급 받은 토큰 저장
         else:
-            print("Get Authentification token fail!\nYou have to restart your app!!!")
-            return
+            raise RuntimeError(
+                f"Get Authentification token fail! (HTTP {rescode}): {res.text[:200]}"
+            )
     else:
         my_token = saved_token  # 기존 발급 토큰 확인되어 기존 토큰 사용
 
@@ -547,8 +561,9 @@ def auth_ws(svr="prod", product=_cfg["my_prod"]):
     if rescode == 200:  # 토큰 정상 발급
         approval_key = _getResultObject(res.json()).approval_key
     else:
-        print("Get Approval token fail!\nYou have to restart your app!!!")
-        return
+        raise RuntimeError(
+            f"Get Approval token fail! (HTTP {rescode}): {res.text[:200]}"
+        )
 
     changeTREnv(None, svr, product)
 

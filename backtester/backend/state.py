@@ -149,7 +149,7 @@ class TradingState:
             self._current_mode = mode
             self._save_mode_file(mode)
             logger.info(f"인증 자동 복원 완료 (mode={mode})")
-        except KIS_AUTH_ERRORS as e:
+        except (KIS_AUTH_ERRORS, RuntimeError) as e:
             logger.info(f"인증 자동 복원 실패 (미인증 상태로 시작): {e}")
             self._authenticated = False
 
@@ -165,14 +165,16 @@ class TradingState:
         )
 
     def _clear_token_file(self):
-        """오늘 날짜의 토큰 파일 삭제"""
-        token_file = self._get_token_file_path()
-        if os.path.exists(token_file):
-            try:
-                os.remove(token_file)
-                logger.info(f"토큰 삭제: {token_file}")
-            except OSError as e:
-                logger.warning(f"토큰 삭제 실패: {e}")
+        """저장된 토큰 파일 삭제(당일 + prod/vps 분리본).
+
+        ka.token_tmp는 import 시점 날짜라 자정을 넘기면 오늘 날짜와 어긋난다.
+        ka.clear_saved_tokens()가 양쪽을 모두 지운다.
+        """
+        try:
+            removed = ka.clear_saved_tokens()
+            logger.info(f"토큰 삭제: {removed}개")
+        except OSError as e:
+            logger.warning(f"토큰 삭제 실패: {e}")
 
     def _reload_config(self) -> None:
         """kis_devlp.yaml 변경사항을 ka._cfg에 반영한다.
@@ -224,6 +226,7 @@ class TradingState:
         try:
             self._reload_config()
             ka.auth(svr=mode)
+            self._verify_env_mode(mode)
             self._authenticated = True
             self._current_mode = mode
             if switching_mode:
@@ -234,6 +237,24 @@ class TradingState:
         finally:
             if not succeeded:
                 self._authenticated = False
+
+    def _verify_env_mode(self, mode: str) -> None:
+        """인증 결과가 요청 모드와 일치하는지 대조한다. 불일치면 RuntimeError.
+
+        ka.auth()가 실패하면 예외가 전파되어 여기 오지 않으므로,
+        여기 도달했는데 모드가 다르면 캐시 토큰 오판이다.
+        """
+        paper = ka.isPaperTrading()
+        if (mode == "vps") != bool(paper):
+            raise RuntimeError(
+                f"인증 모드 불일치: 요청={mode}, isPaperTrading={paper}"
+            )
+        expected_url = ka._cfg.get(mode)
+        actual_url = getattr(ka.getTREnv(), "my_url", None)
+        if expected_url and actual_url != expected_url:
+            raise RuntimeError(
+                f"인증 도메인 불일치: 요청={mode}, my_url={actual_url!r}"
+            )
 
     def can_switch_mode(self) -> tuple[bool, int]:
         """모드 전환 가능 여부 및 남은 쿨다운 시간
