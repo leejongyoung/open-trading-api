@@ -14,7 +14,8 @@ def authenticate(svr: str = "vps") -> bool:
     """
     try:
         return trading_state.authenticate(mode=svr)
-    except (ModeSwitchCooldownError, *KIS_AUTH_ERRORS):
+    except (ModeSwitchCooldownError, *KIS_AUTH_ERRORS, RuntimeError):
+        # RuntimeError: ka.auth() 발급 실패·모드 대조 실패. bool API이므로 False로만 알린다.
         return False
 
 

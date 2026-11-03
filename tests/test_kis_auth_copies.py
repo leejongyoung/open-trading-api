@@ -51,6 +51,20 @@ FIXTURE_CFG = {
 _counter = 0
 
 
+class FakeResp:
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self._payload = payload or {"rt_cd": "0", "msg_cd": "00000000", "msg1": "OK"}
+        self.headers = {}
+        self.text = str(self._payload)
+
+    def json(self):
+        return self._payload
+
+
+LOAD_BLOCKED = FakeResp(500, {"rt_cd": "1", "msg_cd": "EGW00123", "msg1": "blocked"})
+
+
 def load_copy(name, tmp_path, monkeypatch):
     """복제본 하나를 격리 HOME에서 import한다. 매번 새 모듈 객체."""
     global _counter
@@ -73,6 +87,9 @@ def load_copy(name, tmp_path, monkeypatch):
     )
     mod = importlib.util.module_from_spec(spec)
     sys.modules[mod_name] = mod
+    # import 시점의 네트워크 호출(legacy/rest의 auth() 등)을 원천 차단한다
+    monkeypatch.setattr("requests.post", lambda *a, **k: LOAD_BLOCKED)
+    monkeypatch.setattr("requests.get", lambda *a, **k: LOAD_BLOCKED)
     spec.loader.exec_module(mod)
     return mod
 
@@ -90,17 +107,6 @@ def modern_copy(request, tmp_path, monkeypatch):
 @pytest.fixture(params=WITH_URL_FETCH)
 def fetch_copy(request, tmp_path, monkeypatch):
     return request.param, load_copy(request.param, tmp_path, monkeypatch)
-
-
-class FakeResp:
-    def __init__(self, status_code=200, payload=None):
-        self.status_code = status_code
-        self._payload = payload or {"rt_cd": "0", "msg_cd": "00000000", "msg1": "OK"}
-        self.headers = {}
-        self.text = str(self._payload)
-
-    def json(self):
-        return self._payload
 
 
 # ---- 이슈 #11: reAuth가 24시간 뒤 실제로 동작한다 ----
@@ -198,3 +204,20 @@ def test_change_trenv_stores_new_token(any_copy):
     # falsy 토큰이면 기존 값을 유지한다(auth_ws의 changeTREnv(None, ...) 경로)
     mod.changeTREnv(None, "vps", "01")
     assert mod.getTREnv().my_token == "NEWTOKEN123"
+
+
+# ---- 이슈 #14: 토큰 발급 실패는 조용히 넘기지 않고 예외를 던진다 ----
+
+def test_auth_failure_raises(any_copy, monkeypatch):
+    _, mod = any_copy
+    monkeypatch.setattr(mod.requests, "post", lambda *a, **k: FakeResp(500, {"rt_cd": "1", "msg_cd": "EGW00123", "msg1": "fail"}))
+    with pytest.raises(RuntimeError):
+        mod.auth(svr="vps", product="01")
+
+
+@pytest.mark.parametrize("name", ["backtester", "strategy_builder"])
+def test_auth_ws_failure_raises(name, tmp_path, monkeypatch):
+    mod = load_copy(name, tmp_path, monkeypatch)
+    monkeypatch.setattr(mod.requests, "post", lambda *a, **k: FakeResp(500, {"rt_cd": "1", "msg_cd": "EGW00123", "msg1": "fail"}))
+    with pytest.raises(RuntimeError):
+        mod.auth_ws(svr="vps", product="01")
