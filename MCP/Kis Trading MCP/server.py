@@ -10,8 +10,9 @@ from module.mcp_auth import McpAuthMiddleware, ensure_http_access_token
 from module.plugin import Database
 from tools import *
 
+_LOG_LEVEL = os.getenv("MCP_LOG_LEVEL", "DEBUG").upper()
 logging.basicConfig(
-    level=logging.DEBUG,  # DEBUG 이상 (DEBUG, INFO, WARNING...) 모두 출력
+    level=getattr(logging, _LOG_LEVEL, logging.DEBUG),
     format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%H:%M:%S'
 )
