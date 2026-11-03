@@ -20,6 +20,7 @@ from core.signal import Action, Signal
 from core.data_fetcher import get_deposit, get_holdings, get_pending_orders, cancel_order, clear_balance_cache
 from core.errors import BOUNDARY_ERRORS
 from core.log_sanitize import log_error, log_text, log_token
+from backend.security import check_real_order_limits, is_real_mode, real_orders_allowed
 from backend import is_authenticated, get_current_mode
 
 logging.basicConfig(level=logging.INFO)
@@ -217,8 +218,25 @@ async def execute_order(request: OrderRequest):
         add_log("info", f"주문 실행 중: {request.action} {request.quantity}주 @ {price_display} ({order_type_display})")
         logging.info(f"[주문] order_type={request.order_type}, price={request.price}, strength={signal.strength}, target_price={signal.target_price}")
 
-        # 4. OrderExecutor 호출 (현재 트레이딩 모드 사용)
+        # 4. 실전 모드 확인 절차 (옵트인 + 상한)
         env_dv = get_current_mode()
+        if is_real_mode(env_dv):
+            if not real_orders_allowed():
+                add_log("error", "실전 주문은 STRATEGY_ALLOW_REAL_ORDERS=1 설정이 필요합니다")
+                return OrderResponse(
+                    status="error",
+                    message="실전 주문은 STRATEGY_ALLOW_REAL_ORDERS=1 설정이 필요합니다",
+                    logs=logs
+                )
+            limit_msg = check_real_order_limits(
+                request.quantity,
+                request.price if request.order_type == "limit" else None,
+            )
+            if limit_msg:
+                add_log("error", limit_msg)
+                return OrderResponse(status="error", message=limit_msg, logs=logs)
+
+        # 5. OrderExecutor 호출 (현재 트레이딩 모드 사용)
         executor = OrderExecutor(env_dv=env_dv)
         result = executor.execute_signal(signal)
 
@@ -522,8 +540,13 @@ async def cancel_order_api(request: CancelOrderRequest):
     """
     if not is_authenticated():
         raise HTTPException(status_code=401, detail="인증이 필요합니다")
-    
+
     env_dv = get_current_mode()
+    if is_real_mode(env_dv) and not real_orders_allowed():
+        raise HTTPException(
+            status_code=403,
+            detail="실전 취소는 STRATEGY_ALLOW_REAL_ORDERS=1 설정이 필요합니다",
+        )
     
     try:
         logging.info(f"취소 요청 수신: order_no={log_token(request.order_no)}, org_no={log_token(request.org_no) if request.org_no else ''}")

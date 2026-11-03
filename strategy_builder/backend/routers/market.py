@@ -10,7 +10,12 @@ from core import data_fetcher
 from core.errors import BOUNDARY_ERRORS
 from core.log_sanitize import log_error, log_token
 from core.websocket_manager import get_ws_manager
-from backend import authenticate, is_authenticated
+from backend.security import (
+    is_allowed_origin,
+    is_valid_stock_code,
+    ws_subscription_guard,
+)
+from backend import is_authenticated
 
 logging.basicConfig(level=logging.INFO)
 
@@ -18,11 +23,11 @@ router = APIRouter()
 
 
 def ensure_authenticated(env_dv: str = "vps") -> bool:
-    """인증 상태 확인 후 필요시 인증 시도"""
-    if is_authenticated():
-        return True
-    # 인증되지 않았으면 인증 시도
-    return authenticate(env_dv)
+    """인증 상태만 확인한다. GET 조회에서 자동 로그인을 유발하지 않는다.
+
+    로그인·모드 전환(쿨다운·rate limit 적용)은 POST /api/auth/login에서만 수행한다.
+    """
+    return is_authenticated()
 
 
 @router.get("/orderbook/{stock_code}")
@@ -56,7 +61,12 @@ async def get_orderbook(
         }
     """
     try:
-        # 인증 확인/시도
+        if not is_valid_stock_code(stock_code):
+            return {
+                "status": "error",
+                "message": "종목코드는 6자리 숫자여야 합니다"
+            }
+        # 인증 확인 (자동 로그인을 유발하지 않음)
         if not ensure_authenticated(env_dv):
             return {
                 "status": "error",
@@ -112,7 +122,12 @@ async def get_current_price(
         }
     """
     try:
-        # 인증 확인/시도
+        if not is_valid_stock_code(stock_code):
+            return {
+                "status": "error",
+                "message": "종목코드는 6자리 숫자여야 합니다"
+            }
+        # 인증 확인 (자동 로그인을 유발하지 않음)
         if not ensure_authenticated(env_dv):
             return {
                 "status": "error",
@@ -164,6 +179,18 @@ async def websocket_orderbook(websocket: WebSocket, stock_code: str):
             }
         }
     """
+    if not is_valid_stock_code(stock_code):
+        await websocket.close(code=4400, reason="Invalid stock code")
+        return
+    origin = websocket.headers.get("origin")
+    if not is_allowed_origin(origin):
+        logging.warning(f"WebSocket Origin 거부: {origin}")
+        await websocket.close(code=4408, reason="Origin not allowed")
+        return
+    if not ws_subscription_guard.acquire():
+        await websocket.close(code=1013, reason="Too many subscriptions")
+        return
+
     await websocket.accept()
     logging.info(f"WebSocket 연결: {log_token(stock_code)}")
 
@@ -201,4 +228,5 @@ async def websocket_orderbook(websocket: WebSocket, stock_code: str):
     finally:
         # 구독 해제
         await ws_manager.unsubscribe_orderbook(stock_code, websocket)
+        ws_subscription_guard.release()
         logging.info(f"WebSocket 연결 종료: {log_token(stock_code)}")
