@@ -29,6 +29,9 @@ FUNCTION_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 _ORDER_API_PREFIXES = ("order", "daytime_order")
 _ORDER_API_NAMES = frozenset({"buy", "sell"})
 _ORDER_READ_EXCEPTIONS = frozenset({"order_resv_list"})
+
+# 동적 trenv 매핑에서 자동 주입하지 않는 시크릿 속성 (이슈 #9)
+_TRENV_SECRET_ATTRS = frozenset({"my_sec", "my_token"})
 ORDER_TIMEOUT = 120  # 주문 계열 자식 실행 타임아웃(초): 토큰 발급+주문 합산
 DEFAULT_TIMEOUT = 15  # 조회 계열 타임아웃(초)
 
@@ -305,14 +308,17 @@ class ApiExecutor:
         
         dynamic_mappings = {}
         discovered_mappings = []
-        
+
         for param_name, trenv_attr in matches:
+            # 시크릿 속성(my_sec 등)은 자동 주입하지 않는다 (이슈 #9)
+            if trenv_attr in _TRENV_SECRET_ATTRS:
+                continue
             # 발견된 매핑을 그대로 사용 (완전 자동화!)
             trenv_value = f'ka._TRENV.{trenv_attr}'
-            
+
             # 소문자 버전 (함수 파라미터)
             dynamic_mappings[param_name] = trenv_value
-            
+
             discovered_mappings.append(f"{param_name}=xxx.{trenv_attr}")
         
         if discovered_mappings:

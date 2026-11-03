@@ -65,7 +65,6 @@ def main():
     OverseasFutureOptionTool().register(mcp_server=mcp_server)
     ElwTool().register(mcp_server=mcp_server)
     EtfEtnTool().register(mcp_server=mcp_server)
-    AuthTool().register(mcp_server=mcp_server)
 
 
     # MCP 서버 실행 방식 결정

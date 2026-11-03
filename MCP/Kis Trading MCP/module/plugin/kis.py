@@ -111,7 +111,7 @@ def setup_kis_config(force_update=False):
 
         if hts_id:
             config['my_htsid'] = hts_id
-            logging.info(f"✅ HTS ID 설정 완료: {hts_id}")
+            logging.info("✅ HTS ID 설정 완료")
         else:
             logging.warning("⚠️ KIS_HTS_ID 환경변수가 설정되지 않았습니다.")
 
