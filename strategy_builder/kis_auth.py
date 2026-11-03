@@ -771,6 +771,14 @@ def add_open_map(
     elif type(data) is str:
         open_map[name]["items"].append(data)
 
+def open_subscription_count():
+    """구독 종목 수 합계(TR 개수가 아니라 items 합계다). 한도 검사의 기준."""
+    total = 0
+    for obj in open_map.values():
+        items = obj.get("items", [])
+        total += len(items) if isinstance(items, list) else 1
+    return total
+
 
 data_map: dict = {}
 
@@ -806,7 +814,6 @@ class KISWebSocket:
     result_all_data: bool = False
 
     retry_count: int = 0
-    amx_retries: int = 0
 
     # init
     def __init__(self, api_url: str, max_retries: int = 3):
@@ -833,9 +840,22 @@ class KISWebSocket:
                 if dm.get("encrypt", None) == "Y":
                     d = aes_cbc_base64_dec(dm["key"], dm["iv"], d)
 
-                df = pd.read_csv(
-                    StringIO(d), header=None, sep="^", names=dm["columns"], dtype=object
-                )
+                try:
+                    record_count = int(d1[2]) if len(d1) > 2 else 1
+                except (ValueError, TypeError):
+                    record_count = 1
+                fields = d.split("^")
+                ncols = len(dm["columns"])
+                if record_count > 1 and ncols and len(fields) == record_count * ncols:
+                    rows = [
+                        fields[i * ncols:(i + 1) * ncols]
+                        for i in range(record_count)
+                    ]
+                    df = pd.DataFrame(rows, columns=dm["columns"], dtype=object)
+                else:
+                    df = pd.read_csv(
+                        StringIO(d), header=None, sep="^", names=dm["columns"], dtype=object
+                    )
 
                 show_result = True
 
@@ -859,13 +879,15 @@ class KISWebSocket:
                 self.on_result(ws, tr_id, df, data_map[tr_id])
 
     async def __runner(self):
-        if len(open_map.keys()) > 40:
+        if open_subscription_count() > 40:
             raise ValueError("Subscription's max is 40")
 
         url = f"{getTREnv().my_url_ws}{self.api_url}"
 
         while self.retry_count < self.max_retries:
             try:
+                # 재연결마다 approval_key를 새로 받는다(구 키 재사용 방지)
+                auth_ws()
                 async with websockets.connect(url) as ws:
                     # request subscribe
                     for name, obj in open_map.items():
@@ -880,7 +902,14 @@ class KISWebSocket:
             except _RUNNER_ERRORS + _callback_errors(self.on_result) as e:
                 logging.warning("웹소켓 연결 예외(%s), 재시도합니다.", type(e).__name__)
                 self.retry_count += 1
-                await asyncio.sleep(1)
+                await asyncio.sleep(min(2 ** self.retry_count, 30))
+            else:
+                # 서버가 정상 종료했으면 백오프 후 재연결하고 카운트를 리셋한다
+                self.retry_count = 0
+                await asyncio.sleep(5)
+        raise ConnectionError(
+            f"웹소켓 재연결 {self.max_retries}회 초과 (마지막 이후로 복구되지 않음)"
+        )
 
     # func
     @classmethod
@@ -927,13 +956,13 @@ class KISWebSocket:
     ):
         add_open_map(request.__name__, request, data, kwargs)
 
-    def unsubscribe(
+    async def unsubscribe(
             self,
             ws: websockets.ClientConnection,
             request: Callable[[str, str, ...], (dict, list[str])],
             data: list | str,
     ):
-        self.send_multiple(ws, request, "2", data)
+        await self.send_multiple(ws, request, "2", data)
 
     # start
     def start(
