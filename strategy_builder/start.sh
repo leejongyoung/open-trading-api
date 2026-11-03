@@ -10,9 +10,26 @@ echo "Frontend: http://localhost:3000"
 echo "Backend:  http://localhost:8000"
 echo ""
 
-# Kill existing processes on these ports
-lsof -ti:3000 | xargs kill -9 2>/dev/null
-lsof -ti:8000 | xargs kill -9 2>/dev/null
+# 포트 충돌 시: node/python(uvicorn) 프로세스만 TERM으로 종료하고,
+# 1초 뒤 남은 것만 KILL한다. 주문 처리 중인 다른 프로세스를 날리지 않도록 kill -9 즉시 사용 금지.
+for port in 3000 8000; do
+  for pid in $(lsof -ti:$port 2>/dev/null); do
+    if ps -p "$pid" -o comm= 2>/dev/null | grep -qiE "node|python|uvicorn"; then
+      kill "$pid" 2>/dev/null
+    else
+      echo "[경고] 포트 $port 점유 PID $pid 는 node/python이 아니라 남겨둡니다"
+    fi
+  done
+done
+sleep 1
+for port in 3000 8000; do
+  for pid in $(lsof -ti:$port 2>/dev/null); do
+    if ps -p "$pid" -o comm= 2>/dev/null | grep -qiE "node|python|uvicorn"; then
+      echo "[경고] 포트 $port PID $pid 가 아직 살아 있어 KILL합니다"
+      kill -9 "$pid" 2>/dev/null
+    fi
+  done
+done
 
 # Start backend
 cd "$SCRIPT_DIR"
