@@ -232,6 +232,8 @@ async def execute_order(request: OrderRequest):
                     error_reason = f"미보유 종목입니다. {request.stock_name}을(를) 보유하고 있지 않습니다."
             elif request.action == "BUY":
                 error_reason = "주문이 거부되었습니다. 서버 로그를 확인하세요."
+                if executor.last_error:
+                    error_reason = f"주문이 거부되었습니다: {executor.last_error}"
 
             add_log("error", error_reason)
 

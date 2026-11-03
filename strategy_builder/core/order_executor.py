@@ -23,6 +23,31 @@ from core.signal import Action, Signal
 logging.basicConfig(level=logging.INFO)
 
 
+_REAL_ENVS = ("real", "prod")
+_DEMO_ENVS = ("demo", "vps")
+
+
+def is_real_env(env_dv: str) -> bool:
+    """환경 문자열 정규화: real/prod → True(실전), demo/vps → False(모의). 그 외는 ValueError"""
+    if env_dv in _REAL_ENVS:
+        return True
+    if env_dv in _DEMO_ENVS:
+        return False
+    raise ValueError(f"env_dv는 real/prod 또는 demo/vps만 가능합니다: {env_dv!r}")
+
+
+def resolve_order_tr_id(env_dv: str, action: Action) -> str:
+    """참조 구현(examples_llm/domestic_stock/order_cash)과 동일한 주식 주문 TR ID.
+
+    실전 매수 TTTC0012U / 매도 TTTC0011U, 모의 매수 VTTC0012U / 매도 VTTC0011U.
+    """
+    if action == Action.BUY:
+        return "TTTC0012U" if is_real_env(env_dv) else "VTTC0012U"
+    if action == Action.SELL:
+        return "TTTC0011U" if is_real_env(env_dv) else "VTTC0011U"
+    raise ValueError(f"주문 TR ID를 결정할 수 없는 action입니다: {action!r}")
+
+
 class OrderExecutor:
     """
     주문 실행 클래스
@@ -36,7 +61,9 @@ class OrderExecutor:
                 - True: 이미 보유 중인 종목도 추가 매수 가능
                 - False: 이미 보유 중인 종목 매수 불가 (기존 동작)
         """
+        self.is_real = is_real_env(env_dv)
         self.env_dv = env_dv
+        self.last_error = ""
         self.allow_duplicate_buy = allow_duplicate_buy
         self.position_manager = PositionManager(env_dv)
         self.risk_manager = RiskManager()
@@ -59,6 +86,8 @@ class OrderExecutor:
             5. 주문 파라미터 결정
             6. order_cash() 호출
         """
+        self.last_error = ""
+
         # 1. HOLD 시그널 무시
         if signal.action == Action.HOLD:
             logging.info(f"HOLD 시그널 - 주문 생략: {log_text(signal.stock_name)}")
@@ -199,11 +228,8 @@ class OrderExecutor:
         try:
             trenv = ka.getTREnv()
 
-            # TR_ID 설정
-            if self.env_dv == "real":
-                tr_id = "TTTC0802U" if signal.action == Action.BUY else "TTTC0801U"
-            else:
-                tr_id = "VTTC0802U" if signal.action == Action.BUY else "VTTC0801U"
+            # TR_ID 설정 (참조 구현: examples_llm/domestic_stock/order_cash)
+            tr_id = resolve_order_tr_id(self.env_dv, signal.action)
 
             params = {
                 "CANO": trenv.my_acct,
@@ -235,7 +261,8 @@ class OrderExecutor:
 
                 return result
             else:
-                logging.error(f"주문 실패: {log_text(signal.stock_name)}")
+                self.last_error = f"[{res.getErrorCode()}] {res.getErrorMessage()}"
+                logging.error(f"주문 실패: {log_text(signal.stock_name)} {log_text(self.last_error)}")
                 res.printError("/uapi/domestic-stock/v1/trading/order-cash")
                 return pd.DataFrame()
 
