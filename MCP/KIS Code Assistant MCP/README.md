@@ -90,8 +90,22 @@ uv run server.py
 docker build -t kis-code-assistant-mcp .
 
 # 서버 실행
-docker run -d -p 8081:8081 --name kis-code-assistant-mcp kis-code-assistant-mcp
+# 호스트의 127.0.0.1에만 publish (외부 노출 방지). 컨테이너 내부는 MCP_HOST=0.0.0.0
+docker run -d -p 127.0.0.1:8081:8081 \
+  -e MCP_ACCESS_TOKEN="$(openssl rand -hex 32)" \
+  --name kis-code-assistant-mcp kis-code-assistant-mcp
 ```
+
+**보안 설정 (환경변수)**
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `MCP_HOST` | `127.0.0.1` | 바인딩 주소. Docker 이미지는 `0.0.0.0`(컨테이너 내부)으로 설정됨 |
+| `PORT` | `8081` | 포트 |
+| `MCP_ACCESS_TOKEN` | (없음) | 설정 시 `/health`를 제외한 모든 요청에 `Authorization: Bearer <토큰>` 필요 |
+| `MCP_CORS_ORIGINS` | `localhost`/`127.0.0.1` | 허용 Origin 목록(쉼표 구분). `*`는 기본값이 아님 |
+
+외부 인터페이스(`0.0.0.0` 등)로 열 때는 반드시 `MCP_ACCESS_TOKEN`을 설정하세요.
 
 #### **4단계: 서버 상태 확인 (HTTP 방식)**
 ```bash

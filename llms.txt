@@ -9,7 +9,7 @@
 
 ## Configuration & Guides
 
-- [Configuration Template](kis_devlp.yaml): Provides a template for environment configuration, including sandbox (paper trading) and production environments, API credentials (App Keys/Secrets) and account settings.
+- [Configuration Template](kis_devlp.sample.yaml): Provides a template for environment configuration, including sandbox (paper trading) and production environments, API credentials (App Keys/Secrets) and account settings.
 - [System Requirements & Setup](README.md): Main documentation including setup instructions. The project requires Python 3.11+ and recommends using the `uv` package manager.
 
 ## Advanced Strategy & Backtesting

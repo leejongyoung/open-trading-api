@@ -98,7 +98,7 @@ ChatGPT, Claude 등 LLM(Large Language Model)과 AI 에이전트가 이 저장�
 │   └── overseas_stock           # 해외주식
 ├── legacy/                      # 구 샘플코드 보관
 ├── stocks_info/                 # 종목정보파일 참고 데이터
-├── kis_devlp.yaml               # API 설정 파일 (개인정보 입력 필요)
+├── kis_devlp.sample.yaml        # API 설정 템플릿 (복사해 kis_devlp.yaml로 사용, 실제 파일은 git 제외)
 ├── pyproject.toml               # (uv)프로젝트 의존성 관리
 └── uv.lock                      # (uv)의존성 락 파일
 ```
@@ -225,13 +225,13 @@ uv sync
 
 - 본인의 계정 설정을 위해 `kis_devlp.yaml` 파일을 수정합니다.
 - 기본 경로는 `~/KIS/config/kis_devlp.yaml`입니다. 폴더가 없으면 생성해 주세요.
-- 프로젝트 루트의 `kis_devlp.yaml`을 `~/KIS/config/`로 복사한 뒤 수정하는 것을 권장합니다.
+- 프로젝트 루트의 `kis_devlp.sample.yaml`을 `~/KIS/config/kis_devlp.yaml`로 복사한 뒤 수정하는 것을 권장합니다. 실제 키가 든 `kis_devlp.yaml`은 `.gitignore`로 제외되며 저장소 안에 두지 마세요.
 - 경로를 변경하고 싶다면 `kis_auth.py`의 `config_root` 값을 수정하면 됩니다.
 
 ```bash
 # 설정 폴더 생성 및 파일 복사
 mkdir -p ~/KIS/config
-cp kis_devlp.yaml ~/KIS/config/
+cp kis_devlp.sample.yaml ~/KIS/config/kis_devlp.yaml
 ```
 
 1. `~/KIS/config/kis_devlp.yaml` 파일 열기

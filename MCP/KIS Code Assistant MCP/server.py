@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import os
 import re
 import sys
@@ -298,17 +299,22 @@ ex) 레버리지 ETF 실시간 변동률 알려줘. -> subcategory="실시간시
 # MCP RESOURCES
 # =============================================================================
 
+_SAFE_PATH_SEGMENT = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _is_safe_segment(value: str) -> bool:
+    """URL 경로에 그대로 끼우는 값은 영숫자·밑줄만 허용 (경로 순회·쿼리 삽입 방지)."""
+    return bool(value) and _SAFE_PATH_SEGMENT.fullmatch(value) is not None
+
+
 @mcp.resource("internal://kis-api/{category}/{function_name}", mime_type="text/plain")
 def _kis_api_main_file(category: str, function_name: str) -> dict:
     """KIS API 메인 파일을 읽는 템플릿 리소스"""
-    if not (category and function_name):
+    if not (_is_safe_segment(category) and _is_safe_segment(function_name)):
         return "❌ 잘못된 파라미터"
-    
     url = f"https://raw.githubusercontent.com/koreainvestment/open-trading-api/main/examples_llm/{category}/{function_name}/{function_name}.py"
-    
     # Rate limiting
     time.sleep(0.1)
-    
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -319,20 +325,18 @@ def _kis_api_main_file(category: str, function_name: str) -> dict:
 @mcp.resource("internal://kis-api-chk/{category}/{function_name}", mime_type="text/plain")
 def _kis_api_check_file(category: str, function_name: str) -> dict:
     """KIS API 체크 파일을 읽는 템플릿 리소스"""
-    if not (category and function_name):
+    if not (_is_safe_segment(category) and _is_safe_segment(function_name)):
         return "❌ 잘못된 파라미터"
-    
     url = f"https://raw.githubusercontent.com/koreainvestment/open-trading-api/main/examples_llm/{category}/{function_name}/chk_{function_name}.py"
-    
     # Rate limiting
     time.sleep(0.1)
-    
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         return response.text
     except requests.RequestException as e:
         return f"❌ GitHub 파일 읽기 실패: {str(e)}"
+
 
 
 # =============================================================================
@@ -768,6 +772,59 @@ async def fetch_api_code(
     }
 
 # =============================================================================
+# HTTP SERVER SECURITY SETTINGS
+# =============================================================================
+
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_CORS_ORIGINS = ["http://localhost", "http://127.0.0.1"]
+# 인증 없이 접근 가능한 경로 (컨테이너 헬스체크용)
+AUTH_EXEMPT_PATHS = {"/health"}
+
+
+def get_bind_host() -> str:
+    """MCP_HOST 환경변수(기본 127.0.0.1). Docker에서는 0.0.0.0으로 지정."""
+    return os.environ.get("MCP_HOST", "").strip() or DEFAULT_HOST
+
+
+def get_cors_origins() -> list[str]:
+    """MCP_CORS_ORIGINS(쉼표 구분)로 허용 Origin 지정. 미지정 시 localhost만 허용."""
+    raw = os.environ.get("MCP_CORS_ORIGINS", "")
+    origins = [o.strip() for o in raw.split(",") if o.strip()]
+    return origins or list(DEFAULT_CORS_ORIGINS)
+
+
+def get_access_token() -> str:
+    """MCP_ACCESS_TOKEN이 설정되면 모든 요청(/health 제외)에 Bearer 토큰을 요구."""
+    return os.environ.get("MCP_ACCESS_TOKEN", "").strip()
+
+
+class BearerAuthMiddleware:
+    """선택적 Bearer 토큰 인증 (ASGI, SSE 스트리밍 호환). CORS preflight(OPTIONS)는 통과."""
+
+    def __init__(self, app, token: str):
+        self.app = app
+        self.token = token
+
+    async def __call__(self, scope, receive, send):
+        if (
+            scope["type"] != "http"
+            or scope.get("method") == "OPTIONS"
+            or scope.get("path") in AUTH_EXEMPT_PATHS
+        ):
+            await self.app(scope, receive, send)
+            return
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope["headers"]}
+        scheme, _, supplied = headers.get("authorization", "").partition(" ")
+        if scheme.lower() == "bearer" and hmac.compare_digest(supplied.strip(), self.token):
+            await self.app(scope, receive, send)
+            return
+        response = JSONResponse(
+            {"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"}
+        )
+        await response(scope, receive, send)
+
+
+# =============================================================================
 # MAIN APPLICATION
 # =============================================================================
 
@@ -821,11 +878,18 @@ def main():
             "version": VERSION
         })
 
-    # IMPORTANT: add CORS middleware for browser based clients
+    # 선택적 Bearer 토큰 인증 (MCP_ACCESS_TOKEN)
+    token = get_access_token()
+    if token:
+        app.add_middleware(BearerAuthMiddleware, token=token)
+
+    # CORS: 허용 Origin 목록(MCP_CORS_ORIGINS, 기본 localhost)만 허용. 인증 미들웨어보다 바깥에서 preflight 처리
+    origins = get_cors_origins()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=origins,
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?" if origins == DEFAULT_CORS_ORIGINS else None,
+        allow_credentials="*" not in origins,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
         expose_headers=["mcp-session-id", "mcp-protocol-version"],
@@ -834,9 +898,12 @@ def main():
 
     # Get port from environment variable (default: 8081)
     port = int(os.environ.get("PORT", 8081))
-    print(f"Listening on port {port}")
+    host = get_bind_host()
+    print(f"Listening on {host}:{port} (auth: {'on' if token else 'off'})")
+    if host not in ("127.0.0.1", "localhost", "::1") and not token:
+        print("WARNING: 외부 인터페이스에 바인딩했지만 MCP_ACCESS_TOKEN이 없습니다.")
 
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 if __name__ == "__main__":
     main()
