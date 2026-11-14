@@ -53,7 +53,7 @@ class APISearcher:
                 mask &= (self._data[key] == value)
             else:
                 mask &= self._data[key].astype(str).str.contains(
-                    str(value), case=False, na=False
+                    str(value), case=False, na=False, regex=False
                 )
         
         result = self._data[mask]
